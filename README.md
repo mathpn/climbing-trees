@@ -1,2 +1,4 @@
-# climbing-trees
+# Climbing Trees
+
 Learning about decision trees
+

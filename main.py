@@ -62,12 +62,20 @@ def _find_best_split(feature, y):
     return best_split
 
 
+def split_node(leaf_node: LeafNode, X, y):
+    best_split = _find_best_split(X, y)
+    # XXX feature_idx
+    node = Node(0, best_split, LeafNode(0), LeafNode(1))
+    return node
+
+
 if __name__ == "__main__":
     X_0 = np.random.normal(0, size=100)
     X_1 = np.random.normal(2, size=100)
     X = np.concatenate((X_0, X_1))
     y = np.repeat([0, 1], 100)
-    out = _find_best_split(X, y)
-    pred = (X >= out).astype(int)
+    node = LeafNode(0)
+    node = split_node(node, X, y)
+    pred = (X >= node.split_value).astype(int)
     print(pred)
     print(y)

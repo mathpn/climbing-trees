@@ -1,6 +1,22 @@
+from __future__ import annotations
+
 from collections import Counter
+from dataclasses import dataclass
 
 import numpy as np
+
+
+@dataclass
+class LeafNode:
+    value: int
+
+
+@dataclass
+class Node:
+    feature_idx: int
+    split_value: float
+    left: Node | LeafNode
+    right: Node | LeafNode
 
 
 def _entropy(prob):

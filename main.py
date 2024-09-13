@@ -19,6 +19,17 @@ class Node:
     right: Node | LeafNode
 
 
+class Tree:
+    def __init__(self) -> None:
+        self.root = LeafNode()
+
+    def fit(self, X, y) -> None:
+        pass
+
+    def predict(self, X) -> np.ndarray:
+        pass
+
+
 def _entropy(prob):
     prob = prob[prob > 0]
     return np.sum(-prob * np.log2(prob))

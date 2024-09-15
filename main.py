@@ -42,40 +42,47 @@ def _class_probabilities(labels):
     )
 
 
-def _find_best_split(feature, y):
-    sort_idx = np.argsort(feature)
-    feature_sort = feature[sort_idx]
-    y_sort = y[sort_idx]
+def _find_best_split(X, y):
 
     min_split_entropy = 1e9
-    best_split = 0
-    for idx in range(1, len(sort_idx) - 1):
-        entropy_l = _entropy(_class_probabilities(y_sort[:idx]))
-        entropy_r = _entropy(_class_probabilities(y_sort[idx:]))
-        p_l = (idx) / len(sort_idx)
-        p_r = (len(sort_idx) - idx) / len(sort_idx)
-        conditional_entropy = p_l * entropy_l + p_r * entropy_r
-        if conditional_entropy < min_split_entropy:
-            min_split_entropy = conditional_entropy
-            best_split = feature_sort[idx]
+    best_split = best_feat = 0
 
-    return best_split
+    for feat_idx in range(X.shape[1]):
+        feature = X[:, feat_idx]
+        sort_idx = np.argsort(feature)
+        feature_sort = feature[sort_idx]
+        y_sort = y[sort_idx]
+
+        for idx in range(1, len(sort_idx) - 1):
+            entropy_l = _entropy(_class_probabilities(y_sort[:idx]))
+            entropy_r = _entropy(_class_probabilities(y_sort[idx:]))
+            p_l = (idx) / len(sort_idx)
+            p_r = (len(sort_idx) - idx) / len(sort_idx)
+            conditional_entropy = p_l * entropy_l + p_r * entropy_r
+            if conditional_entropy < min_split_entropy:
+                min_split_entropy = conditional_entropy
+                best_split = feature_sort[idx]
+                best_feat = feat_idx
+
+    return best_feat, best_split
 
 
 def split_node(leaf_node: LeafNode, X, y):
-    best_split = _find_best_split(X, y)
-    # XXX feature_idx
-    node = Node(0, best_split, LeafNode(0), LeafNode(1))
+    feat_idx, best_split = _find_best_split(X, y)
+    node = Node(feat_idx, best_split, LeafNode(0), LeafNode(1))
     return node
 
 
 if __name__ == "__main__":
     X_0 = np.random.normal(0, size=100)
     X_1 = np.random.normal(2, size=100)
-    X = np.concatenate((X_0, X_1))
+    X_2 = np.random.normal(0, size=200).reshape(-1, 1)
+    X = np.concatenate((X_0, X_1)).reshape(-1, 1)
+    X = np.concatenate((X_2, X), axis=1)
     y = np.repeat([0, 1], 100)
     node = LeafNode(0)
     node = split_node(node, X, y)
-    pred = (X >= node.split_value).astype(int)
+    print(node)
+    pred = (X[:, node.feature_idx] >= node.split_value).astype(int)
     print(pred)
     print(y)

@@ -101,6 +101,16 @@ def split_node(node, X, y, value):
     return node
 
 
+def print_tree(node, indent: str = "") -> None:
+    if isinstance(node.left, LeafNode):
+        print(f"{indent}{node.feature_idx}: {node.split_value} -> {node.left.value}")
+        return
+
+    print(f"{indent}{node.feature_idx}: {node.split_value}")
+
+    print_tree(node.left, indent + "  ")
+    print_tree(node.right, indent + "  ")
+
 if __name__ == "__main__":
     X_0 = np.random.normal(0, size=100)
     X_1 = np.random.normal(2, size=100)

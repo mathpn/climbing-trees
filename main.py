@@ -46,6 +46,7 @@ def _find_best_split(X, y):
 
     min_split_entropy = 1e9
     best_split = best_feat = 0
+    best_left = best_right = None
 
     for feat_idx in range(X.shape[1]):
         feature = X[:, feat_idx]
@@ -54,6 +55,8 @@ def _find_best_split(X, y):
         y_sort = y[sort_idx]
 
         for idx in range(1, len(sort_idx) - 1):
+            left = sort_idx[:idx]
+            right = sort_idx[idx:]
             entropy_l = _entropy(_class_probabilities(y_sort[:idx]))
             entropy_r = _entropy(_class_probabilities(y_sort[idx:]))
             p_l = (idx) / len(sort_idx)
@@ -63,13 +66,24 @@ def _find_best_split(X, y):
                 min_split_entropy = conditional_entropy
                 best_split = feature_sort[idx]
                 best_feat = feat_idx
+                best_left = left
+                best_right = right
 
-    return best_feat, best_split
+    return best_feat, best_split, best_left, best_right
 
 
-def split_node(leaf_node: LeafNode, X, y):
-    feat_idx, best_split = _find_best_split(X, y)
+def split_node(node, X, y):
+    if X.shape[0] == 1:
+        return LeafNode(0)  # XXX value
+
+    feat_idx, best_split, left, right = _find_best_split(X, y)
+    X_left = X[left, :]
+    X_right = X[right, :]
+    y_left = y[left]
+    y_right = y[right]
     node = Node(feat_idx, best_split, LeafNode(0), LeafNode(1))
+    node.left = split_node(node, X_left, y_left)
+    node.right = split_node(node, X_right, y_right)
     return node
 
 

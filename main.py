@@ -111,6 +111,23 @@ def print_tree(node, indent: str = "") -> None:
     print_tree(node.left, indent + "  ")
     print_tree(node.right, indent + "  ")
 
+
+def predict(root: Node | LeafNode, X: np.ndarray) -> np.ndarray:
+    y_pred = []
+    for x in X:
+        node = root
+
+        while isinstance(node, Node):
+            if x[node.feature_idx] < node.split_value:
+                node = node.left
+            else:
+                node = node.right
+
+        y_pred.append(node.value)
+
+    return np.array(y_pred)
+
+
 if __name__ == "__main__":
     X_0 = np.random.normal(0, size=100)
     X_1 = np.random.normal(2, size=100)
@@ -119,8 +136,9 @@ if __name__ == "__main__":
     X = np.concatenate((X_2, X), axis=1)
     y = np.repeat([0, 1], 100)
     node = LeafNode(0)
-    node = split_node(node, X, y)
+    node = split_node(node, X, y, 0)
     print(node)
-    pred = (X[:, node.feature_idx] >= node.split_value).astype(int)
+    pred = predict(node, X)
     print(pred)
     print(y)
+    print_tree(node)

@@ -69,7 +69,7 @@ def _find_best_split(X, y):
                 best_left = left
                 best_right = right
                 left_label = (np.mean(y_sort[:idx]) >= 0.5).astype(int)
-                right_label = (left_label + 1) % 2
+                right_label = (np.mean(y_sort[idx:]) >= 0.5).astype(int)
 
     return (
         min_split_entropy,

@@ -83,10 +83,12 @@ def _find_best_split(X, y):
 
 
 def split_node(node, X, y, value):
-    if X.shape[0] == 1:
+    if X.shape[0] <= 1:
         return LeafNode(value)
 
-    min_entropy, feat_idx, best_split, left, right, left_label, right_label = (
+    prior_entropy = _entropy(_class_probabilities(y))
+    if prior_entropy == 0:
+        return LeafNode(value)
         _find_best_split(X, y)
     )
 

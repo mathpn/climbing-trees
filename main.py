@@ -54,7 +54,7 @@ def _find_best_split(X, y):
         feature_sort = feature[sort_idx]
         y_sort = y[sort_idx]
 
-        for idx in range(1, len(sort_idx) - 1):
+        for idx in range(1, len(sort_idx)):
             left = sort_idx[:idx]
             right = sort_idx[idx:]
             entropy_l = _entropy(_class_probabilities(y_sort[:idx]))

@@ -89,8 +89,11 @@ def split_node(node, X, y, value):
     prior_entropy = _entropy(_class_probabilities(y))
     if prior_entropy == 0:
         return LeafNode(value)
+
+    split_entropy, feat_idx, best_split, left, right, left_label, right_label = (
         _find_best_split(X, y)
     )
+    print(f"information gain: {prior_entropy - split_entropy:.2f}")
 
     X_left = X[left, :]
     X_right = X[right, :]
@@ -103,15 +106,18 @@ def split_node(node, X, y, value):
     return node
 
 
-def print_tree(node, indent: str = "") -> None:
-    if isinstance(node.left, LeafNode):
-        print(f"{indent}{node.feature_idx}: {node.split_value} -> {node.left.value}")
-        return
-
-    print(f"{indent}{node.feature_idx}: {node.split_value}")
-
-    print_tree(node.left, indent + "  ")
-    print_tree(node.right, indent + "  ")
+def print_tree(node, depth=0):
+    indent = "  " * depth
+    if isinstance(node, LeafNode):
+        print(f"{indent}LeafNode(value={node.value})")
+    else:
+        print(
+            f"{indent}Node(feature_idx={node.feature_idx}, split_value={node.split_value:.2f})"
+        )
+        print(f"{indent}Left:")
+        print_tree(node.left, depth + 1)
+        print(f"{indent}Right:")
+        print_tree(node.right, depth + 1)
 
 
 def predict(root: Node | LeafNode, X: np.ndarray) -> np.ndarray:

@@ -19,17 +19,6 @@ class Node:
     right: Node | LeafNode
 
 
-class Tree:
-    def __init__(self) -> None:
-        self.root = LeafNode()
-
-    def fit(self, X, y) -> None:
-        pass
-
-    def predict(self, X) -> np.ndarray:
-        pass
-
-
 def _entropy(prob):
     prob = prob[prob > 0]
     return np.sum(-prob * np.log2(prob))
@@ -82,8 +71,8 @@ def _find_best_split(X, y):
     )
 
 
-def split_node(node, X, y, value):
-    if X.shape[0] <= 1:
+def split_node(node, X, y, value, depth, max_depth):
+    if X.shape[0] <= 1 or depth >= max_depth:
         return LeafNode(value)
 
     prior_entropy = _entropy(_class_probabilities(y))
@@ -93,7 +82,7 @@ def split_node(node, X, y, value):
     split_entropy, feat_idx, best_split, left, right, left_label, right_label = (
         _find_best_split(X, y)
     )
-    print(f"information gain: {prior_entropy - split_entropy:.2f}")
+    # print(f"information gain: {prior_entropy - split_entropy:.2f}")
 
     X_left = X[left, :]
     X_right = X[right, :]
@@ -101,8 +90,8 @@ def split_node(node, X, y, value):
     y_right = y[right]
     node = Node(feat_idx, best_split, LeafNode(left_label), LeafNode(right_label))
 
-    node.left = split_node(node, X_left, y_left, left_label)
-    node.right = split_node(node, X_right, y_right, right_label)
+    node.left = split_node(node, X_left, y_left, left_label, depth + 1, max_depth)
+    node.right = split_node(node, X_right, y_right, right_label, depth + 1, max_depth)
     return node
 
 
@@ -144,9 +133,9 @@ if __name__ == "__main__":
     X = np.concatenate((X_2, X), axis=1)
     y = np.repeat([0, 1], 100)
     node = LeafNode(0)
-    node = split_node(node, X, y, 0)
-    print(node)
+    node = split_node(node, X, y, 0, depth=0, max_depth=5)
     pred = predict(node, X)
+    print(node)
+    print_tree(node)
     print(pred)
     print(y)
-    print_tree(node)

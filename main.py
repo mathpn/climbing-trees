@@ -131,13 +131,21 @@ def predict_class(root: Node | LeafNode, X: np.ndarray) -> np.ndarray:
     return pred
 
 
+def count_nodes(node: Node | LeafNode):
+    if isinstance(node, LeafNode):
+        return 1
+    else:
+        return 1 + count_nodes(node.left) + count_nodes(node.right)
+
+
 if __name__ == "__main__":
-    X_0 = np.random.normal(0, size=100)
-    X_1 = np.random.normal(2, size=100)
-    X_2 = np.random.normal(0, size=200).reshape(-1, 1)
+    n = 1000
+    X_0 = np.random.normal(0, size=n)
+    X_1 = np.random.normal(2, size=n)
+    X_2 = np.random.normal(0, size=2 * n).reshape(-1, 1)
     X = np.concatenate((X_0, X_1)).reshape(-1, 1)
     X = np.concatenate((X_2, X), axis=1)
-    y = np.repeat([0, 1], 100)
+    y = np.repeat([0, 1], n)
     node = LeafNode(0)
     node = split_node(node, X, y, 0, depth=0, max_depth=5)
     pred = predict_class(node, X)

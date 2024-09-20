@@ -4,6 +4,8 @@ from collections import Counter
 from dataclasses import dataclass
 
 import numpy as np
+from sklearn.datasets import load_breast_cancer
+from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 
 
 @dataclass
@@ -139,17 +141,26 @@ def count_nodes(node: Node | LeafNode):
 
 
 if __name__ == "__main__":
-    n = 1000
-    X_0 = np.random.normal(0, size=n)
-    X_1 = np.random.normal(2, size=n)
-    X_2 = np.random.normal(0, size=2 * n).reshape(-1, 1)
-    X = np.concatenate((X_0, X_1)).reshape(-1, 1)
-    X = np.concatenate((X_2, X), axis=1)
-    y = np.repeat([0, 1], n)
+    # n = 1000
+    # X_0 = np.random.normal(0, size=n)
+    # X_1 = np.random.normal(2, size=n)
+    # X_2 = np.random.normal(0, size=2 * n).reshape(-1, 1)
+    # X = np.concatenate((X_0, X_1)).reshape(-1, 1)
+    # X = np.concatenate((X_2, X), axis=1)
+    # y = np.repeat([0, 1], n)
+
+    X, y = load_breast_cancer(return_X_y=True)
+
     node = LeafNode(0)
-    node = split_node(node, X, y, 0, depth=0, max_depth=5)
+    node = split_node(node, X, y, 0, depth=0, max_depth=3)
+    pred_proba = predict(node, X)
     pred = predict_class(node, X)
-    print(node)
+    score = f1_score(y, pred)
+    acc = accuracy_score(y, pred)
+    auc = roc_auc_score(y, pred_proba)
     print_tree(node)
     print(pred)
     print(y)
+    print(
+        f"F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f} with {count_nodes(node)} nodes"
+    )

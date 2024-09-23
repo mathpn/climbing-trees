@@ -73,7 +73,7 @@ def _find_best_split(X, y):
     )
 
 
-def split_node(node, X, y, value, depth, max_depth):
+def split_node(node, X, y, value, depth, max_depth, min_info_gain: float = 0):
     if X.shape[0] <= 1 or depth >= max_depth:
         return LeafNode(value)
 
@@ -84,7 +84,9 @@ def split_node(node, X, y, value, depth, max_depth):
     split_entropy, feat_idx, best_split, left, right, left_prob, right_prob = (
         _find_best_split(X, y)
     )
-    # print(f"information gain: {prior_entropy - split_entropy:.2f}")
+    info_gain = prior_entropy - split_entropy
+    if info_gain < min_info_gain:
+        return None
 
     X_left = X[left, :]
     X_right = X[right, :]
@@ -92,8 +94,27 @@ def split_node(node, X, y, value, depth, max_depth):
     y_right = y[right]
     node = Node(feat_idx, best_split, LeafNode(left_prob), LeafNode(right_prob))
 
-    node.left = split_node(node, X_left, y_left, left_prob, depth + 1, max_depth)
-    node.right = split_node(node, X_right, y_right, right_prob, depth + 1, max_depth)
+    left = split_node(
+        node, X_left, y_left, left_prob, depth + 1, max_depth, min_info_gain
+    )
+    right = split_node(
+        node, X_right, y_right, right_prob, depth + 1, max_depth, min_info_gain
+    )
+
+    if left is not None:
+        node.left = left
+    if right is not None:
+        node.right = right
+
+    return node
+
+
+def train_tree(X, y, max_depth: int, min_info_gain: float) -> Node | LeafNode:
+    node = LeafNode(0)
+    trained_node = split_node(
+        node, X, y, 0, depth=0, max_depth=max_depth, min_info_gain=min_info_gain
+    )
+    node = trained_node if trained_node is not None else node
     return node
 
 
@@ -150,17 +171,15 @@ if __name__ == "__main__":
     # y = np.repeat([0, 1], n)
 
     X, y = load_breast_cancer(return_X_y=True)
-
-    node = LeafNode(0)
-    node = split_node(node, X, y, 0, depth=0, max_depth=3)
-    pred_proba = predict(node, X)
-    pred = predict_class(node, X)
+    tree = train_tree(X, y, max_depth=4, min_info_gain=0.2)
+    pred_proba = predict(tree, X)
+    pred = predict_class(tree, X)
     score = f1_score(y, pred)
     acc = accuracy_score(y, pred)
     auc = roc_auc_score(y, pred_proba)
-    print_tree(node)
+    print_tree(tree)
     print(pred)
     print(y)
     print(
-        f"F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f} with {count_nodes(node)} nodes"
+        f"F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f} with {count_nodes(tree)} nodes"
     )

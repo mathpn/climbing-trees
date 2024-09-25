@@ -33,6 +33,12 @@ def _class_probabilities(labels):
     )
 
 
+def _one_hot_encode(arr):
+    one_hot = np.zeros((arr.size, arr.max() + 1), dtype=np.uint8)
+    one_hot[np.arange(arr.size), arr] = 1
+    return one_hot
+
+
 def _find_best_split(X, y):
 
     min_split_entropy = 1e9

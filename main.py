@@ -4,13 +4,13 @@ from collections import Counter
 from dataclasses import dataclass
 
 import numpy as np
-from sklearn.datasets import load_breast_cancer
+from sklearn.datasets import load_breast_cancer, load_wine
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 
 
 @dataclass
 class LeafNode:
-    prob: float
+    prob: np.ndarray
 
 
 @dataclass
@@ -27,13 +27,13 @@ def _entropy(prob):
 
 
 def _class_probabilities(labels):
-    total_count = len(labels)
-    return np.array(
-        [label_count / total_count for label_count in Counter(labels).values()]
-    )
+    return labels.mean(axis=0)
 
 
 def _one_hot_encode(arr):
+    if arr.max() == 1:
+        return arr.reshape(-1, 1)
+
     one_hot = np.zeros((arr.size, arr.max() + 1), dtype=np.uint8)
     one_hot[np.arange(arr.size), arr] = 1
     return one_hot
@@ -65,8 +65,8 @@ def _find_best_split(X, y):
                 best_feat = feat_idx
                 best_left = left
                 best_right = right
-                left_prob = np.mean(y_sort[:idx])
-                right_prob = np.mean(y_sort[idx:])
+                left_prob = np.mean(y_sort[:idx], axis=0)
+                right_prob = np.mean(y_sort[idx:], axis=0)
 
     return (
         min_split_entropy,
@@ -116,9 +116,10 @@ def split_node(node, X, y, value, depth, max_depth, min_info_gain: float = 0):
 
 
 def train_tree(X, y, max_depth: int, min_info_gain: float) -> Node | LeafNode:
+    y_oh = _one_hot_encode(y)
     node = LeafNode(0)
     trained_node = split_node(
-        node, X, y, 0, depth=0, max_depth=max_depth, min_info_gain=min_info_gain
+        node, X, y_oh, 0, depth=0, max_depth=max_depth, min_info_gain=min_info_gain
     )
     node = trained_node if trained_node is not None else node
     return node
@@ -127,7 +128,7 @@ def train_tree(X, y, max_depth: int, min_info_gain: float) -> Node | LeafNode:
 def print_tree(node, depth=0):
     indent = "  " * depth
     if isinstance(node, LeafNode):
-        print(f"{indent}LeafNode(value={node.prob})")
+        print(f"{indent}LeafNode(value={np.array_str(node.prob, precision=2)})")
     else:
         print(
             f"{indent}Node(feature_idx={node.feature_idx}, split_value={node.split_value:.2f})"
@@ -156,7 +157,11 @@ def predict(root: Node | LeafNode, X: np.ndarray) -> np.ndarray:
 
 def predict_class(root: Node | LeafNode, X: np.ndarray) -> np.ndarray:
     pred_prob = predict(root, X)
-    pred = (pred_prob >= 0.5).astype(int)
+    if pred_prob.shape[1] > 1:
+        pred = np.argmax(pred_prob, axis=1)
+    else:
+        pred = (pred_prob.squeeze(1) >= 0.5).astype(int)
+
     return pred
 
 
@@ -176,13 +181,13 @@ if __name__ == "__main__":
     # X = np.concatenate((X_2, X), axis=1)
     # y = np.repeat([0, 1], n)
 
-    X, y = load_breast_cancer(return_X_y=True)
-    tree = train_tree(X, y, max_depth=4, min_info_gain=0.2)
+    X, y = load_wine(return_X_y=True)
+    tree = train_tree(X, y, max_depth=3, min_info_gain=0.3)
     pred_proba = predict(tree, X)
     pred = predict_class(tree, X)
-    score = f1_score(y, pred)
+    score = f1_score(y, pred, average="macro")
     acc = accuracy_score(y, pred)
-    auc = roc_auc_score(y, pred_proba)
+    auc = roc_auc_score(y, pred_proba, multi_class="ovr")
     print_tree(tree)
     print(pred)
     print(y)

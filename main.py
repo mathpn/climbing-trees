@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import Counter
 from dataclasses import dataclass
 
 import numpy as np
@@ -42,7 +41,8 @@ def _one_hot_encode(arr):
 def _find_best_split(X, y):
 
     min_split_entropy = 1e9
-    best_split = best_feat = left_prob = right_prob = 0
+    left_prob = right_prob = np.mean(y, axis=0)
+    best_split = best_feat = 0
     best_left = best_right = None
 
     for feat_idx in range(X.shape[1]):
@@ -117,7 +117,7 @@ def split_node(node, X, y, value, depth, max_depth, min_info_gain: float = 0):
 
 def train_tree(X, y, max_depth: int, min_info_gain: float) -> Node | LeafNode:
     y_oh = _one_hot_encode(y)
-    node = LeafNode(0)
+    node = LeafNode(np.zeros(y_oh.shape[1]))
     trained_node = split_node(
         node, X, y_oh, 0, depth=0, max_depth=max_depth, min_info_gain=min_info_gain
     )
@@ -157,19 +157,18 @@ def predict(root: Node | LeafNode, X: np.ndarray) -> np.ndarray:
 
 def predict_class(root: Node | LeafNode, X: np.ndarray) -> np.ndarray:
     pred_prob = predict(root, X)
-    if pred_prob.shape[1] > 1:
-        pred = np.argmax(pred_prob, axis=1)
-    else:
-        pred = (pred_prob.squeeze(1) >= 0.5).astype(int)
 
-    return pred
+    if pred_prob.shape[1] > 1:
+        return np.argmax(pred_prob, axis=1)
+
+    return (pred_prob.squeeze(1) >= 0.5).astype(int)
 
 
 def count_nodes(node: Node | LeafNode):
     if isinstance(node, LeafNode):
         return 1
-    else:
-        return 1 + count_nodes(node.left) + count_nodes(node.right)
+
+    return 1 + count_nodes(node.left) + count_nodes(node.right)
 
 
 if __name__ == "__main__":

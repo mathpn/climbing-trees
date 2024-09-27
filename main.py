@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -125,6 +126,24 @@ def train_tree(X, y, max_depth: int, min_info_gain: float) -> Node | LeafNode:
     return node
 
 
+def _sample(X, y, sample_size: int) -> tuple[np.ndarray, np.ndarray]:
+    idx = np.random.choice(range(X.shape[0]), size=sample_size, replace=True)
+
+    X_sample = X[idx]
+    y_sample = y[idx]
+
+    return X_sample, y_sample
+
+
+def train_tree_bagging(
+    X, y, n_trees: int, sample_proportion: float, max_depth: int, min_info_gain: float
+):
+    n = math.floor(X.shape[0] * sample_proportion)
+    return [
+        train_tree(*_sample(X, y, n), max_depth, min_info_gain) for _ in range(n_trees)
+    ]
+
+
 def print_tree(node, depth=0):
     indent = "  " * depth
     if isinstance(node, LeafNode):
@@ -155,13 +174,17 @@ def predict(root: Node | LeafNode, X: np.ndarray) -> np.ndarray:
     return np.array(y_pred)
 
 
-def predict_class(root: Node | LeafNode, X: np.ndarray) -> np.ndarray:
-    pred_prob = predict(root, X)
+def predict_ensemble(trees: list[Node | LeafNode], X: np.ndarray) -> np.ndarray:
+    preds = [predict(root, X) for root in trees]
+    pred_arr = np.stack(preds, axis=2)
+    return pred_arr.mean(axis=2)
 
-    if pred_prob.shape[1] > 1:
-        return np.argmax(pred_prob, axis=1)
 
-    return (pred_prob.squeeze(1) >= 0.5).astype(int)
+def prob_to_class(prob: np.ndarray) -> np.ndarray:
+    if prob.shape[1] > 1:
+        return np.argmax(prob, axis=1)
+
+    return (prob.squeeze(1) >= 0.5).astype(int)
 
 
 def count_nodes(node: Node | LeafNode):
@@ -181,15 +204,29 @@ if __name__ == "__main__":
     # y = np.repeat([0, 1], n)
 
     X, y = load_wine(return_X_y=True)
-    tree = train_tree(X, y, max_depth=3, min_info_gain=0.3)
+    max_depth = 4
+    min_info_gain = 0.1
+
+    tree = train_tree(X, y, max_depth=max_depth, min_info_gain=min_info_gain)
     pred_proba = predict(tree, X)
-    pred = predict_class(tree, X)
+    pred = prob_to_class(pred_proba)
     score = f1_score(y, pred, average="macro")
     acc = accuracy_score(y, pred)
     auc = roc_auc_score(y, pred_proba, multi_class="ovr")
     print_tree(tree)
-    print(pred)
-    print(y)
     print(
-        f"F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f} with {count_nodes(tree)} nodes"
+        f"tree -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f} with {count_nodes(tree)} nodes"
     )
+
+    trees = train_tree_bagging(
+        X, y, 5, 0.5, max_depth=max_depth, min_info_gain=min_info_gain
+    )
+    pred_proba = predict_ensemble(trees, X)
+    pred = prob_to_class(pred_proba)
+    score = f1_score(y, pred, average="macro")
+    acc = accuracy_score(y, pred)
+    auc = roc_auc_score(y, pred_proba, multi_class="ovr")
+    for i, tree in enumerate(trees):
+        print(f"-> tree {i+1}")
+        print_tree(tree)
+    print(f"bagging -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f}")

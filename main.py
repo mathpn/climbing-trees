@@ -144,6 +144,21 @@ def train_tree_bagging(
     ]
 
 
+def train_random_forest(
+    X, y, n_trees: int, sample_proportion: float, max_depth: int, min_info_gain: float
+):
+    n = math.floor(X.shape[0] * sample_proportion)
+    n_features = math.floor(math.sqrt(X.shape[1]))
+    trees = []
+    for _ in range(n_trees):
+        idx = np.random.choice(np.arange(X.shape[1]), size=n_features, replace=False)
+        X_sample = X[:, idx]
+        tree = train_tree(*_sample(X_sample, y, n), max_depth, min_info_gain)
+        trees.append((tree, idx))
+
+    return trees
+
+
 def print_tree(node, depth=0):
     indent = "  " * depth
     if isinstance(node, LeafNode):
@@ -176,6 +191,14 @@ def predict(root: Node | LeafNode, X: np.ndarray) -> np.ndarray:
 
 def predict_ensemble(trees: list[Node | LeafNode], X: np.ndarray) -> np.ndarray:
     preds = [predict(root, X) for root in trees]
+    pred_arr = np.stack(preds, axis=2)
+    return pred_arr.mean(axis=2)
+
+
+def predict_random_forest(
+    trees: list[tuple[Node | LeafNode, np.ndarray]], X: np.ndarray
+) -> np.ndarray:
+    preds = [predict(root, X[:, idx]) for root, idx in trees]
     pred_arr = np.stack(preds, axis=2)
     return pred_arr.mean(axis=2)
 
@@ -226,7 +249,20 @@ if __name__ == "__main__":
     score = f1_score(y, pred, average="macro")
     acc = accuracy_score(y, pred)
     auc = roc_auc_score(y, pred_proba, multi_class="ovr")
-    for i, tree in enumerate(trees):
-        print(f"-> tree {i+1}")
-        print_tree(tree)
+    # for i, tree in enumerate(trees):
+    #     print(f"-> tree {i+1}")
+    #     print_tree(tree)
     print(f"bagging -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f}")
+
+    trees = train_random_forest(
+        X, y, 5, 0.5, max_depth=max_depth, min_info_gain=min_info_gain
+    )
+    pred_proba = predict_random_forest(trees, X)
+    pred = prob_to_class(pred_proba)
+    score = f1_score(y, pred, average="macro")
+    acc = accuracy_score(y, pred)
+    auc = roc_auc_score(y, pred_proba, multi_class="ovr")
+    # for i, tree in enumerate(trees):
+    #     print(f"-> tree {i+1}")
+    #     print_tree(tree)
+    print(f"random forest -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f}")

@@ -169,16 +169,26 @@ def _resample_with_weight(X, y, sample_weights: np.ndarray):
     return X, y
 
 
+def _reweight_samples_adaboost(y, pred, sample_weights):
+    err = 1 - np.sum(pred == y) / y.shape[0]
+    alpha = np.log((1 - err) / err)
+    sample_weights = sample_weights * np.exp(alpha * (pred != y))
+    sample_weights = sample_weights / np.sum(sample_weights)
+    return sample_weights
+
+
 def train_adaboost(X, y, iterations: int):
     learners = []
     X_sample = X
     y_sample = y
+    sample_weights = np.ones(X.shape[0]) / X.shape[0]
     for _ in range(iterations):
         learner = train_tree(X_sample, y_sample, 1, 0)
         learners.append(learner)
-        # XXX implement loss
-        sample_weights = np.ones(X.shape[0]) / X.shape[0]
+        pred = prob_to_class(predict(learner, X))
+        sample_weights = _reweight_samples_adaboost(y, pred, sample_weights)
         X_sample, y_sample = _resample_with_weight(X, y, sample_weights)
+
     return learners
 
 

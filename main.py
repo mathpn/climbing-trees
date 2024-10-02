@@ -159,6 +159,29 @@ def train_random_forest(
     return trees
 
 
+def _resample_with_weight(X, y, sample_weights: np.ndarray):
+    n_samples = X.shape[0]
+    bootstrap_indices = np.random.choice(
+        n_samples, size=n_samples, replace=True, p=sample_weights
+    )
+    X = X[bootstrap_indices]
+    y = y[bootstrap_indices]
+    return X, y
+
+
+def train_adaboost(X, y, iterations: int):
+    learners = []
+    X_sample = X
+    y_sample = y
+    for _ in range(iterations):
+        learner = train_tree(X_sample, y_sample, 1, 0)
+        learners.append(learner)
+        # XXX implement loss
+        sample_weights = np.ones(X.shape[0]) / X.shape[0]
+        X_sample, y_sample = _resample_with_weight(X, y, sample_weights)
+    return learners
+
+
 def print_tree(node, depth=0):
     indent = "  " * depth
     if isinstance(node, LeafNode):
@@ -266,3 +289,14 @@ if __name__ == "__main__":
     #     print(f"-> tree {i+1}")
     #     print_tree(tree)
     print(f"random forest -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f}")
+
+    trees = train_adaboost(X, y, 10)
+    pred_proba = predict_ensemble(trees, X)
+    pred = prob_to_class(pred_proba)
+    score = f1_score(y, pred, average="macro")
+    acc = accuracy_score(y, pred)
+    auc = roc_auc_score(y, pred_proba, multi_class="ovr")
+    # for i, tree in enumerate(trees):
+    #     print(f"-> tree {i+1}")
+    #     print_tree(tree)
+    print(f"AdaBoost -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f}")

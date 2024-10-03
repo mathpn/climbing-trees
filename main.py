@@ -7,6 +7,8 @@ import numpy as np
 from sklearn.datasets import load_breast_cancer, load_wine
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 
+EPS = 1e-6
+
 
 @dataclass
 class LeafNode:
@@ -26,8 +28,11 @@ def _entropy(prob):
     return np.sum(-prob * np.log2(prob))
 
 
-def _class_probabilities(labels):
-    return labels.mean(axis=0)
+def _class_probabilities(labels, sample_weights=None):
+    if sample_weights is None:
+        return np.mean(labels, axis=0)
+
+    return (sample_weights * labels).sum(axis=0) / np.sum(sample_weights)
 
 
 def _one_hot_encode(arr):
@@ -39,7 +44,7 @@ def _one_hot_encode(arr):
     return one_hot
 
 
-def _find_best_split(X, y):
+def _find_best_split(X, y, sample_weights=None):
 
     min_split_entropy = 1e9
     left_prob = right_prob = np.mean(y, axis=0)
@@ -55,8 +60,8 @@ def _find_best_split(X, y):
         for idx in range(1, len(sort_idx)):
             left = sort_idx[:idx]
             right = sort_idx[idx:]
-            entropy_l = _entropy(_class_probabilities(y_sort[:idx]))
-            entropy_r = _entropy(_class_probabilities(y_sort[idx:]))
+            entropy_l = _entropy(_class_probabilities(y_sort[:idx], sample_weights))
+            entropy_r = _entropy(_class_probabilities(y_sort[idx:], sample_weights))
             p_l = (idx) / len(sort_idx)
             p_r = (len(sort_idx) - idx) / len(sort_idx)
             conditional_entropy = p_l * entropy_l + p_r * entropy_r
@@ -80,7 +85,9 @@ def _find_best_split(X, y):
     )
 
 
-def split_node(node, X, y, value, depth, max_depth, min_info_gain: float = 0):
+def split_node(
+    node, X, y, value, depth, max_depth, min_info_gain: float = 0, sample_weights=None
+):
     if X.shape[0] <= 1 or depth >= max_depth:
         return LeafNode(value)
 
@@ -102,10 +109,24 @@ def split_node(node, X, y, value, depth, max_depth, min_info_gain: float = 0):
     node = Node(feat_idx, best_split, LeafNode(left_prob), LeafNode(right_prob))
 
     left = split_node(
-        node, X_left, y_left, left_prob, depth + 1, max_depth, min_info_gain
+        node,
+        X_left,
+        y_left,
+        left_prob,
+        depth + 1,
+        max_depth,
+        min_info_gain,
+        sample_weights,
     )
     right = split_node(
-        node, X_right, y_right, right_prob, depth + 1, max_depth, min_info_gain
+        node,
+        X_right,
+        y_right,
+        right_prob,
+        depth + 1,
+        max_depth,
+        min_info_gain,
+        sample_weights,
     )
 
     if left is not None:
@@ -116,11 +137,20 @@ def split_node(node, X, y, value, depth, max_depth, min_info_gain: float = 0):
     return node
 
 
-def train_tree(X, y, max_depth: int, min_info_gain: float) -> Node | LeafNode:
+def train_tree(
+    X, y, max_depth: int, min_info_gain: float, sample_weights=None
+) -> Node | LeafNode:
     y_oh = _one_hot_encode(y)
     node = LeafNode(np.zeros(y_oh.shape[1]))
     trained_node = split_node(
-        node, X, y_oh, 0, depth=0, max_depth=max_depth, min_info_gain=min_info_gain
+        node,
+        X,
+        y_oh,
+        0,
+        depth=0,
+        max_depth=max_depth,
+        min_info_gain=min_info_gain,
+        sample_weights=sample_weights,
     )
     node = trained_node if trained_node is not None else node
     return node
@@ -172,7 +202,7 @@ def _resample_with_weight(X, y, sample_weights: np.ndarray):
 def _reweight_samples_adaboost(y, pred, sample_weights):
     err = 1 - np.sum(pred == y) / y.shape[0]
     n_classes = 1 + y.max() - y.min()  # TODO improve class count
-    alpha = np.log((1 - err) / err) + np.log(n_classes - 1)
+    alpha = np.log((1 - err + EPS) / (err + EPS)) + np.log(n_classes - 1)
     sample_weights = sample_weights * np.exp(alpha * (pred != y))
     sample_weights = sample_weights / np.sum(sample_weights)
     return sample_weights
@@ -180,15 +210,13 @@ def _reweight_samples_adaboost(y, pred, sample_weights):
 
 def train_adaboost(X, y, iterations: int):
     learners = []
-    X_sample = X
-    y_sample = y
     sample_weights = np.ones(X.shape[0]) / X.shape[0]
     for _ in range(iterations):
-        learner = train_tree(X_sample, y_sample, 1, 0)
+        # TODO parameters
+        learner = train_tree(X, y, 2, 0, sample_weights=sample_weights)
         learners.append(learner)
         pred = prob_to_class(predict(learner, X))
         sample_weights = _reweight_samples_adaboost(y, pred, sample_weights)
-        X_sample, y_sample = _resample_with_weight(X, y, sample_weights)
 
     return learners
 
@@ -304,7 +332,6 @@ if __name__ == "__main__":
     trees = train_adaboost(X, y, 10)
     pred_proba = predict_ensemble(trees, X)
     pred = prob_to_class(pred_proba)
-    print(pred)
     score = f1_score(y, pred, average="macro")
     acc = accuracy_score(y, pred)
     auc = roc_auc_score(y, pred_proba, multi_class="ovr")

@@ -171,7 +171,8 @@ def _resample_with_weight(X, y, sample_weights: np.ndarray):
 
 def _reweight_samples_adaboost(y, pred, sample_weights):
     err = 1 - np.sum(pred == y) / y.shape[0]
-    alpha = np.log((1 - err) / err)
+    n_classes = 1 + y.max() - y.min()  # TODO improve class count
+    alpha = np.log((1 - err) / err) + np.log(n_classes - 1)
     sample_weights = sample_weights * np.exp(alpha * (pred != y))
     sample_weights = sample_weights / np.sum(sample_weights)
     return sample_weights
@@ -303,6 +304,7 @@ if __name__ == "__main__":
     trees = train_adaboost(X, y, 10)
     pred_proba = predict_ensemble(trees, X)
     pred = prob_to_class(pred_proba)
+    print(pred)
     score = f1_score(y, pred, average="macro")
     acc = accuracy_score(y, pred)
     auc = roc_auc_score(y, pred_proba, multi_class="ovr")

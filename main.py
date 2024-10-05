@@ -189,16 +189,6 @@ def train_random_forest(
     return trees
 
 
-def _resample_with_weight(X, y, sample_weights: np.ndarray):
-    n_samples = X.shape[0]
-    bootstrap_indices = np.random.choice(
-        n_samples, size=n_samples, replace=True, p=sample_weights
-    )
-    X = X[bootstrap_indices]
-    y = y[bootstrap_indices]
-    return X, y
-
-
 def _reweight_samples_adaboost(y, pred, sample_weights):
     err = 1 - np.sum(pred == y) / y.shape[0]
     n_classes = 1 + y.max() - y.min()  # TODO improve class count

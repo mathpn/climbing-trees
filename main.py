@@ -211,6 +211,20 @@ def train_adaboost(X, y, iterations: int):
     return learners
 
 
+# XXX continue implementation
+def train_gradient_boosting(X, y, iterations: int):
+    learners = []
+    residual = y
+    for _ in range(iterations):
+        # TODO parameters
+        learner = train_tree(X, residual, 2, 0)
+        learners.append(learner)
+        pred = predict(learner, X)
+        residual = residual - pred
+
+    return learners
+
+
 def print_tree(node, depth=0):
     indent = "  " * depth
     if isinstance(node, LeafNode):

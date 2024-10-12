@@ -12,7 +12,7 @@ EPS = 1e-6
 
 @dataclass
 class LeafNode:
-    prob: np.ndarray
+    value: np.ndarray
 
 
 @dataclass
@@ -35,6 +35,18 @@ def _class_probabilities(labels, sample_weights=None):
     return (sample_weights * labels).sum(axis=0) / np.sum(sample_weights)
 
 
+def _entropy_criterion(y, sample_weights=None):
+    return _entropy(_class_probabilities(y, sample_weights))
+
+
+def _mse_criterion(y, sample_weights=None):
+    if sample_weights is None:
+        sample_weights = np.ones_like(y) / y.shape[0]
+
+    value = (sample_weights * y) / sample_weights.sum()
+    return np.mean(np.power(y - value, 2))
+
+
 def _one_hot_encode(arr):
     if arr.max() == 1:
         return arr.reshape(-1, 1)
@@ -44,10 +56,9 @@ def _one_hot_encode(arr):
     return one_hot
 
 
-def _find_best_split(X, y, sample_weights=None):
-
-    min_split_entropy = 1e9
-    left_prob = right_prob = np.mean(y, axis=0)
+def _find_best_split(X, y, criterion_fn, sample_weights=None):
+    min_criterion = 1e9
+    left_value = right_value = np.mean(y, axis=0)
     best_split = best_feat = 0
     best_left = best_right = None
 
@@ -60,43 +71,52 @@ def _find_best_split(X, y, sample_weights=None):
         for idx in range(1, len(sort_idx)):
             left = sort_idx[:idx]
             right = sort_idx[idx:]
-            entropy_l = _entropy(_class_probabilities(y_sort[:idx], sample_weights))
-            entropy_r = _entropy(_class_probabilities(y_sort[idx:], sample_weights))
+            criterion_l = criterion_fn(y_sort[:idx], sample_weights)
+            criterion_r = criterion_fn(y_sort[idx:], sample_weights)
             p_l = (idx) / len(sort_idx)
             p_r = (len(sort_idx) - idx) / len(sort_idx)
-            conditional_entropy = p_l * entropy_l + p_r * entropy_r
-            if conditional_entropy < min_split_entropy:
-                min_split_entropy = conditional_entropy
+            criterion = p_l * criterion_l + p_r * criterion_r
+            if criterion < min_criterion:
+                min_criterion = criterion
                 best_split = feature_sort[idx]
                 best_feat = feat_idx
                 best_left = left
                 best_right = right
-                left_prob = np.mean(y_sort[:idx], axis=0)
-                right_prob = np.mean(y_sort[idx:], axis=0)
+                left_value = np.mean(y_sort[:idx], axis=0)
+                right_value = np.mean(y_sort[idx:], axis=0)
 
     return (
-        min_split_entropy,
+        min_criterion,
         best_feat,
         best_split,
         best_left,
         best_right,
-        left_prob,
-        right_prob,
+        left_value,
+        right_value,
     )
 
 
 def split_node(
-    node, X, y, value, depth, max_depth, min_info_gain: float = 0, sample_weights=None
+    node,
+    X,
+    y,
+    value,
+    depth,
+    max_depth,
+    criterion_fn,
+    min_info_gain: float = 0,
+    sample_weights=None,
 ):
     if X.shape[0] <= 1 or depth >= max_depth:
         return LeafNode(value)
 
-    prior_entropy = _entropy(_class_probabilities(y))
+    # XXX rename
+    prior_entropy = criterion_fn(y)
     if prior_entropy == 0:
         return LeafNode(value)
 
     split_entropy, feat_idx, best_split, left, right, left_prob, right_prob = (
-        _find_best_split(X, y)
+        _find_best_split(X, y, criterion_fn, sample_weights)
     )
     info_gain = prior_entropy - split_entropy
     if info_gain < min_info_gain:
@@ -115,6 +135,7 @@ def split_node(
         left_prob,
         depth + 1,
         max_depth,
+        criterion_fn,
         min_info_gain,
         sample_weights,
     )
@@ -125,6 +146,7 @@ def split_node(
         right_prob,
         depth + 1,
         max_depth,
+        criterion_fn,
         min_info_gain,
         sample_weights,
     )
@@ -146,9 +168,10 @@ def train_classification_tree(
         node,
         X,
         y_oh,
-        0,
+        np.mean(y, axis=0),
         depth=0,
         max_depth=max_depth,
+        criterion_fn=_entropy_criterion,
         min_info_gain=min_info_gain,
         sample_weights=sample_weights,
     )
@@ -164,9 +187,10 @@ def train_regression_tree(
         node,
         X,
         y,
-        0,
+        np.mean(y, axis=0),
         depth=0,
         max_depth=max_depth,
+        criterion_fn=_mse_criterion,
         min_info_gain=min_info_gain,
         sample_weights=sample_weights,
     )
@@ -260,7 +284,7 @@ def train_gradient_boosting(X, y, iterations: int):
 def print_tree(node, depth=0):
     indent = "  " * depth
     if isinstance(node, LeafNode):
-        print(f"{indent}LeafNode(value={np.array_str(node.prob, precision=2)})")
+        print(f"{indent}LeafNode(value={np.array_str(node.value, precision=2)})")
     else:
         print(
             f"{indent}Node(feature_idx={node.feature_idx}, split_value={node.split_value:.2f})"
@@ -282,7 +306,7 @@ def predict(root: Node | LeafNode, X: np.ndarray) -> np.ndarray:
             else:
                 node = node.right
 
-        y_pred.append(node.prob)
+        y_pred.append(node.value)
 
     return np.array(y_pred)
 
@@ -387,4 +411,4 @@ if __name__ == "__main__":
     # for i, tree in enumerate(trees):
     #     print(f"-> tree {i+1}")
     #     print_tree(tree)
-    print(f"AdaBoost -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f}")
+    print(f"Gradient boosting -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f}")

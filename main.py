@@ -256,8 +256,8 @@ def train_adaboost(X, y, iterations: int):
     return learners
 
 
-def _sigmoid(x):
-    return 1 / (1 + np.exp(-x))
+def softmax(x):
+    return np.exp(x) / np.exp(x).sum(axis=1, keepdims=True)
 
 
 # XXX continue implementation
@@ -265,20 +265,20 @@ def train_gradient_boosting(X, y, iterations: int):
     learners = []
 
     y_oh = _one_hot_encode(y)
-    base_value = _class_probabilities(y_oh)
-    residual = y_oh - base_value
+    raw_pred = np.zeros_like(y_oh, dtype=np.float32)
+    prob = softmax(raw_pred)
 
     for _ in range(iterations):
         # TODO parameters
-        # XXX implement regression tree
-        learner = train_regression_tree(X, residual, 2, 0)
-        print_tree(learner)
+        pseudo_residual = y_oh - prob
+        learner = train_regression_tree(X, pseudo_residual, 2, 0)
+        learner_pred = predict(learner, X)
+        # TODO update predictions
+        raw_pred += learner_pred
+        prob = softmax(raw_pred)
         learners.append(learner)
-        pred_odds = predict(learner, X)
-        pred_prob = _sigmoid(np.log(pred_odds + EPS))
-        residual = residual - pred_prob
 
-    return learners
+    return (raw_pred, learners)
 
 
 def print_tree(node, depth=0):
@@ -325,6 +325,19 @@ def predict_random_forest(
     return pred_arr.mean(axis=2)
 
 
+# XXX rename things
+def predict_gradient_boosting(
+    trees: tuple[np.ndarray, list[Node | LeafNode]], X: np.ndarray
+) -> np.ndarray:
+    base_value, learners = trees
+    value = base_value
+    for learner in learners:
+        pred = predict(learner, X)
+        value = value + pred
+
+    return softmax(value)
+
+
 def prob_to_class(prob: np.ndarray) -> np.ndarray:
     if prob.shape[1] > 1:
         return np.argmax(prob, axis=1)
@@ -348,10 +361,11 @@ if __name__ == "__main__":
     # X = np.concatenate((X_2, X), axis=1)
     # y = np.repeat([0, 1], n)
 
-    X, y = load_wine(return_X_y=True)
+    # X, y = load_wine(return_X_y=True)
+    X, y = load_breast_cancer(return_X_y=True)
     max_depth = 4
     min_info_gain = 0.1
-    #
+
     # tree = train_classification_tree(
     #     X, y, max_depth=max_depth, min_info_gain=min_info_gain
     # )
@@ -403,7 +417,7 @@ if __name__ == "__main__":
     # print(f"AdaBoost -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f}")
 
     trees = train_gradient_boosting(X, y, 10)
-    pred_proba = predict_ensemble(trees, X)
+    pred_proba = predict_gradient_boosting(trees, X)
     pred = prob_to_class(pred_proba)
     score = f1_score(y, pred, average="macro")
     acc = accuracy_score(y, pred)

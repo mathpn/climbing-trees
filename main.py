@@ -327,16 +327,15 @@ def predict_ensemble(trees: list[Node | LeafNode], X: np.ndarray) -> np.ndarray:
 
 
 def predict_random_forest(
-    trees: list[tuple[Node | LeafNode, np.ndarray]], X: np.ndarray
+    model: list[tuple[Node | LeafNode, np.ndarray]], X: np.ndarray
 ) -> np.ndarray:
-    preds = [predict(root, X[:, idx]) for root, idx in trees]
+    preds = [predict(root, X[:, idx]) for root, idx in model]
     pred_arr = np.stack(preds, axis=2)
     return pred_arr.mean(axis=2)
 
 
-# XXX rename things
 def predict_gradient_boosting(
-    trees: tuple[np.ndarray, list[Node | LeafNode]], X: np.ndarray
+    model: tuple[np.ndarray, list[Node | LeafNode]], X: np.ndarray
 ) -> np.ndarray:
     base_value, learners = model
     value = base_value

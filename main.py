@@ -56,7 +56,7 @@ def _one_hot_encode(arr):
     return one_hot
 
 
-def _find_best_split(X, y, criterion_fn, sample_weights=None):
+def _find_best_split(X, y, criterion_fn, sample_weights):
     min_criterion = 1e9
     left_value = right_value = np.mean(y, axis=0)
     best_split = best_feat = 0
@@ -67,12 +67,13 @@ def _find_best_split(X, y, criterion_fn, sample_weights=None):
         sort_idx = np.argsort(feature)
         feature_sort = feature[sort_idx]
         y_sort = y[sort_idx]
+        weights_sort = sample_weights[sort_idx]
 
         for idx in range(1, len(sort_idx)):
             left = sort_idx[:idx]
             right = sort_idx[idx:]
-            criterion_l = criterion_fn(y_sort[:idx], sample_weights)
-            criterion_r = criterion_fn(y_sort[idx:], sample_weights)
+            criterion_l = criterion_fn(y_sort[:idx], weights_sort[:idx])
+            criterion_r = criterion_fn(y_sort[idx:], weights_sort[idx:])
             p_l = (idx) / len(sort_idx)
             p_r = (len(sort_idx) - idx) / len(sort_idx)
             criterion = p_l * criterion_l + p_r * criterion_r
@@ -104,11 +105,14 @@ def split_node(
     depth,
     max_depth,
     criterion_fn,
-    min_info_gain: float = 0,
     sample_weights=None,
+    min_info_gain: float = 0,
 ):
     if X.shape[0] <= 1 or depth >= max_depth:
         return LeafNode(value)
+
+    if sample_weights is None:
+        sample_weights = _uniform_sample_weights(X)
 
     # XXX rename
     prior_entropy = criterion_fn(y)
@@ -136,8 +140,8 @@ def split_node(
         depth + 1,
         max_depth,
         criterion_fn,
-        min_info_gain,
         sample_weights,
+        min_info_gain,
     )
     right = split_node(
         node,
@@ -147,8 +151,8 @@ def split_node(
         depth + 1,
         max_depth,
         criterion_fn,
-        min_info_gain,
         sample_weights,
+        min_info_gain,
     )
 
     if left is not None:
@@ -157,6 +161,10 @@ def split_node(
         node.right = right
 
     return node
+
+
+def _uniform_sample_weights(X):
+    return np.ones((X.shape[0], 1)) / X.shape[0]
 
 
 def train_classification_tree(
@@ -172,8 +180,8 @@ def train_classification_tree(
         depth=0,
         max_depth=max_depth,
         criterion_fn=_entropy_criterion,
-        min_info_gain=min_info_gain,
         sample_weights=sample_weights,
+        min_info_gain=min_info_gain,
     )
     node = trained_node if trained_node is not None else node
     return node
@@ -238,14 +246,15 @@ def _reweight_samples_adaboost(y, pred, sample_weights):
     err = 1 - np.sum(pred == y) / y.shape[0]
     n_classes = 1 + y.max() - y.min()  # TODO improve class count
     alpha = np.log((1 - err + EPS) / (err + EPS)) + np.log(n_classes - 1)
-    sample_weights = sample_weights * np.exp(alpha * (pred != y))
+    diff = (pred != y).reshape(-1, sample_weights.shape[1])
+    sample_weights = sample_weights * np.exp(alpha * diff)
     sample_weights = sample_weights / np.sum(sample_weights)
     return sample_weights
 
 
 def train_adaboost(X, y, iterations: int):
     learners = []
-    sample_weights = np.ones(X.shape[0]) / X.shape[0]
+    sample_weights = np.ones((X.shape[0], 1)) / X.shape[0]
     for _ in range(iterations):
         # TODO parameters
         learner = train_classification_tree(X, y, 2, 0, sample_weights=sample_weights)
@@ -329,7 +338,7 @@ def predict_random_forest(
 def predict_gradient_boosting(
     trees: tuple[np.ndarray, list[Node | LeafNode]], X: np.ndarray
 ) -> np.ndarray:
-    base_value, learners = trees
+    base_value, learners = model
     value = base_value
     for learner in learners:
         pred = predict(learner, X)
@@ -366,55 +375,55 @@ if __name__ == "__main__":
     max_depth = 4
     min_info_gain = 0.1
 
-    # tree = train_classification_tree(
-    #     X, y, max_depth=max_depth, min_info_gain=min_info_gain
-    # )
-    # pred_proba = predict(tree, X)
-    # pred = prob_to_class(pred_proba)
-    # score = f1_score(y, pred, average="macro")
-    # acc = accuracy_score(y, pred)
-    # auc = roc_auc_score(y, pred_proba, multi_class="ovr")
-    # print_tree(tree)
-    # print(
-    #     f"tree -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f} with {count_nodes(tree)} nodes"
-    # )
-    #
-    # trees = train_tree_bagging(
-    #     X, y, 5, 0.5, max_depth=max_depth, min_info_gain=min_info_gain
-    # )
-    # pred_proba = predict_ensemble(trees, X)
-    # pred = prob_to_class(pred_proba)
-    # score = f1_score(y, pred, average="macro")
-    # acc = accuracy_score(y, pred)
-    # auc = roc_auc_score(y, pred_proba, multi_class="ovr")
-    # # for i, tree in enumerate(trees):
-    # #     print(f"-> tree {i+1}")
-    # #     print_tree(tree)
-    # print(f"bagging -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f}")
-    #
-    # trees = train_random_forest(
-    #     X, y, 5, 0.5, max_depth=max_depth, min_info_gain=min_info_gain
-    # )
-    # pred_proba = predict_random_forest(trees, X)
-    # pred = prob_to_class(pred_proba)
-    # score = f1_score(y, pred, average="macro")
-    # acc = accuracy_score(y, pred)
-    # auc = roc_auc_score(y, pred_proba, multi_class="ovr")
-    # # for i, tree in enumerate(trees):
-    # #     print(f"-> tree {i+1}")
-    # #     print_tree(tree)
-    # print(f"random forest -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f}")
-    #
-    # trees = train_adaboost(X, y, 10)
-    # pred_proba = predict_ensemble(trees, X)
-    # pred = prob_to_class(pred_proba)
-    # score = f1_score(y, pred, average="macro")
-    # acc = accuracy_score(y, pred)
-    # auc = roc_auc_score(y, pred_proba, multi_class="ovr")
-    # # for i, tree in enumerate(trees):
-    # #     print(f"-> tree {i+1}")
-    # #     print_tree(tree)
-    # print(f"AdaBoost -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f}")
+    tree = train_classification_tree(
+        X, y, max_depth=max_depth, min_info_gain=min_info_gain
+    )
+    pred_proba = predict(tree, X)
+    pred = prob_to_class(pred_proba)
+    score = f1_score(y, pred, average="macro")
+    acc = accuracy_score(y, pred)
+    auc = roc_auc_score(y, pred_proba, multi_class="ovr")
+    print_tree(tree)
+    print(
+        f"tree -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f} with {count_nodes(tree)} nodes"
+    )
+
+    trees = train_tree_bagging(
+        X, y, 5, 0.5, max_depth=max_depth, min_info_gain=min_info_gain
+    )
+    pred_proba = predict_ensemble(trees, X)
+    pred = prob_to_class(pred_proba)
+    score = f1_score(y, pred, average="macro")
+    acc = accuracy_score(y, pred)
+    auc = roc_auc_score(y, pred_proba, multi_class="ovr")
+    # for i, tree in enumerate(trees):
+    #     print(f"-> tree {i+1}")
+    #     print_tree(tree)
+    print(f"bagging -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f}")
+
+    trees = train_random_forest(
+        X, y, 5, 0.5, max_depth=max_depth, min_info_gain=min_info_gain
+    )
+    pred_proba = predict_random_forest(trees, X)
+    pred = prob_to_class(pred_proba)
+    score = f1_score(y, pred, average="macro")
+    acc = accuracy_score(y, pred)
+    auc = roc_auc_score(y, pred_proba, multi_class="ovr")
+    # for i, tree in enumerate(trees):
+    #     print(f"-> tree {i+1}")
+    #     print_tree(tree)
+    print(f"random forest -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f}")
+
+    trees = train_adaboost(X, y, 10)
+    pred_proba = predict_ensemble(trees, X)
+    pred = prob_to_class(pred_proba)
+    score = f1_score(y, pred, average="macro")
+    acc = accuracy_score(y, pred)
+    auc = roc_auc_score(y, pred_proba, multi_class="ovr")
+    # for i, tree in enumerate(trees):
+    #     print(f"-> tree {i+1}")
+    #     print_tree(tree)
+    print(f"AdaBoost -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f}")
 
     trees = train_gradient_boosting(X, y, 10)
     pred_proba = predict_gradient_boosting(trees, X)

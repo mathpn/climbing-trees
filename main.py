@@ -106,7 +106,7 @@ def split_node(
     max_depth,
     criterion_fn,
     sample_weights=None,
-    min_info_gain: float = 0,
+    min_criterion_reduction: float = 0,
 ):
     if X.shape[0] <= 1 or depth >= max_depth:
         return LeafNode(value)
@@ -114,16 +114,15 @@ def split_node(
     if sample_weights is None:
         sample_weights = _uniform_sample_weights(X)
 
-    # XXX rename
-    prior_entropy = criterion_fn(y)
-    if prior_entropy == 0:
+    prior_criterion = criterion_fn(y)
+    if prior_criterion == 0:
         return LeafNode(value)
 
-    split_entropy, feat_idx, best_split, left, right, left_prob, right_prob = (
+    split_criterion, feat_idx, best_split, left, right, left_prob, right_prob = (
         _find_best_split(X, y, criterion_fn, sample_weights)
     )
-    info_gain = prior_entropy - split_entropy
-    if info_gain < min_info_gain:
+    info_gain = prior_criterion - split_criterion
+    if info_gain < min_criterion_reduction:
         return None
 
     X_left = X[left, :]
@@ -141,7 +140,7 @@ def split_node(
         max_depth,
         criterion_fn,
         sample_weights,
-        min_info_gain,
+        min_criterion_reduction,
     )
     right = split_node(
         node,
@@ -152,7 +151,7 @@ def split_node(
         max_depth,
         criterion_fn,
         sample_weights,
-        min_info_gain,
+        min_criterion_reduction,
     )
 
     if left is not None:
@@ -181,7 +180,7 @@ def train_classification_tree(
         max_depth=max_depth,
         criterion_fn=_entropy_criterion,
         sample_weights=sample_weights,
-        min_info_gain=min_info_gain,
+        min_criterion_reduction=min_info_gain,
     )
     node = trained_node if trained_node is not None else node
     return node
@@ -199,7 +198,7 @@ def train_regression_tree(
         depth=0,
         max_depth=max_depth,
         criterion_fn=_mse_criterion,
-        min_info_gain=min_info_gain,
+        min_criterion_reduction=min_info_gain,
         sample_weights=sample_weights,
     )
     node = trained_node if trained_node is not None else node

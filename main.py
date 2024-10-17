@@ -23,6 +23,62 @@ class Node:
     right: Node | LeafNode
 
 
+class DecisionTreeClassifier:
+    def __init__(self, max_depth: int, min_info_gain: float = 0) -> None:
+        self.max_depth = max_depth
+        self.min_info_gain = min_info_gain
+        self._root_node: Node | LeafNode | None = None
+
+    def fit(self, X, y, sample_weights=None) -> None:
+        y_oh = _one_hot_encode(y)
+        node = LeafNode(np.zeros(y_oh.shape[1]))
+        trained_node = split_node(
+            node,
+            X,
+            y_oh,
+            np.mean(y, axis=0),
+            depth=0,
+            max_depth=max_depth,
+            criterion_fn=_entropy_criterion,
+            sample_weights=sample_weights,
+            min_criterion_reduction=min_info_gain,
+        )
+        node = trained_node if trained_node is not None else node
+        self._root_node = node
+
+    def predict(self, X) -> np.ndarray:
+        return _prob_to_class(self.predict_proba(X))
+
+    def predict_proba(self, X) -> np.ndarray:
+        if self._root_node is None:
+            raise ValueError("model must be trained before prediction")
+
+        y_pred = []
+        for x in X:
+            node = self._root_node
+
+            while isinstance(node, Node):
+                if x[node.feature_idx] < node.split_value:
+                    node = node.left
+                else:
+                    node = node.right
+
+            y_pred.append(node.value)
+
+        return np.array(y_pred)
+
+    def print_tree(self) -> None:
+        if self._root_node is None:
+            print("model is not trained")
+            return
+        print_tree(self._root_node)
+
+    def node_count(self) -> int:
+        if self._root_node is None:
+            return 0
+        return count_nodes(self._root_node)
+
+
 def _entropy(prob):
     prob = prob[prob > 0]
     return np.sum(-prob * np.log2(prob))
@@ -258,7 +314,7 @@ def train_adaboost(X, y, iterations: int):
         # TODO parameters
         learner = train_classification_tree(X, y, 2, 0, sample_weights=sample_weights)
         learners.append(learner)
-        pred = prob_to_class(predict(learner, X))
+        pred = _prob_to_class(predict(learner, X))
         sample_weights = _reweight_samples_adaboost(y, pred, sample_weights)
 
     return learners
@@ -283,7 +339,7 @@ def train_gradient_boosting(X, y, iterations: int, learning_rate: float):
     for _ in range(iterations):
         # TODO parameters
         pseudo_residual = y_oh - prob
-        learner = train_regression_tree(X, pseudo_residual, 2, 0)
+        learner = train_regression_tree(X, pseudo_residual, 1, 0)
         learner_pred = predict(learner, X)
         # TODO update predictions
         raw_pred += learning_rate * learner_pred
@@ -293,7 +349,7 @@ def train_gradient_boosting(X, y, iterations: int, learning_rate: float):
     return (raw_pred, learning_rate, learners)
 
 
-def print_tree(node, depth=0):
+def print_tree(node: Node | LeafNode, depth: int = 0):
     indent = "  " * depth
     if isinstance(node, LeafNode):
         print(f"{indent}LeafNode(value={np.array_str(node.value, precision=2)})")
@@ -352,7 +408,7 @@ def predict_gradient_boosting(
     return pred
 
 
-def prob_to_class(prob: np.ndarray) -> np.ndarray:
+def _prob_to_class(prob: np.ndarray) -> np.ndarray:
     if prob.shape[1] > 1:
         return np.argmax(prob, axis=1)
 
@@ -380,19 +436,18 @@ if __name__ == "__main__":
     max_depth = 4
     min_info_gain = 0.1
 
-    # tree = train_classification_tree(
-    #     X, y, max_depth=max_depth, min_info_gain=min_info_gain
-    # )
-    # pred_proba = predict(tree, X)
-    # pred = prob_to_class(pred_proba)
-    # score = f1_score(y, pred, average="macro")
-    # acc = accuracy_score(y, pred)
-    # auc = roc_auc_score(y, pred_proba, multi_class="ovr")
-    # print_tree(tree)
-    # print(
-    #     f"tree -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f} with {count_nodes(tree)} nodes"
-    # )
-    #
+    tree = DecisionTreeClassifier(max_depth, min_info_gain)
+    tree.fit(X, y)
+    pred_proba = tree.predict_proba(X)
+    pred = tree.predict(X)
+    score = f1_score(y, pred, average="macro")
+    acc = accuracy_score(y, pred)
+    auc = roc_auc_score(y, pred_proba, multi_class="ovr")
+    tree.print_tree()
+    print(
+        f"tree -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f} with {tree.node_count()} nodes"
+    )
+
     # trees = train_tree_bagging(
     #     X, y, 5, 0.5, max_depth=max_depth, min_info_gain=min_info_gain
     # )
@@ -405,7 +460,7 @@ if __name__ == "__main__":
     # #     print(f"-> tree {i+1}")
     # #     print_tree(tree)
     # print(f"bagging -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f}")
-    #
+
     # trees = train_random_forest(
     #     X, y, 5, 0.5, max_depth=max_depth, min_info_gain=min_info_gain
     # )
@@ -418,7 +473,7 @@ if __name__ == "__main__":
     # #     print(f"-> tree {i+1}")
     # #     print_tree(tree)
     # print(f"random forest -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f}")
-    #
+
     # trees = train_adaboost(X, y, 10)
     # pred_proba = predict_ensemble(trees, X)
     # pred = prob_to_class(pred_proba)
@@ -430,15 +485,13 @@ if __name__ == "__main__":
     # #     print_tree(tree)
     # print(f"AdaBoost -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f}")
 
-    trees = train_gradient_boosting(X, y, 10, 0.3)
-    pred_proba = predict_gradient_boosting(trees, X)
-    print(pred_proba)
-    pred = prob_to_class(pred_proba)
-    print(pred)
-    score = f1_score(y, pred, average="macro")
-    acc = accuracy_score(y, pred)
-    auc = roc_auc_score(y, pred_proba, multi_class="ovr")
-    # for i, tree in enumerate(trees):
-    #     print(f"-> tree {i+1}")
-    #     print_tree(tree)
-    print(f"Gradient boosting -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f}")
+    # trees = train_gradient_boosting(X, y, 10, 0.3)
+    # pred_proba = predict_gradient_boosting(trees, X)
+    # pred = _prob_to_class(pred_proba)
+    # score = f1_score(y, pred, average="macro")
+    # acc = accuracy_score(y, pred)
+    # auc = roc_auc_score(y, pred_proba, multi_class="ovr")
+    # # for i, tree in enumerate(trees):
+    # #     print(f"-> tree {i+1}")
+    # #     print_tree(tree)
+    # print(f"Gradient boosting -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f}")

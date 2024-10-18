@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Protocol
 
 import numpy as np
 from sklearn.datasets import load_breast_cancer, load_wine
@@ -21,62 +23,6 @@ class Node:
     split_value: float
     left: Node | LeafNode
     right: Node | LeafNode
-
-
-class DecisionTreeClassifier:
-    def __init__(self, max_depth: int, min_info_gain: float = 0) -> None:
-        self.max_depth = max_depth
-        self.min_info_gain = min_info_gain
-        self._root_node: Node | LeafNode | None = None
-
-    def fit(self, X, y, sample_weights=None) -> None:
-        y_oh = _one_hot_encode(y)
-        node = LeafNode(np.zeros(y_oh.shape[1]))
-        trained_node = split_node(
-            node,
-            X,
-            y_oh,
-            np.mean(y, axis=0),
-            depth=0,
-            max_depth=max_depth,
-            criterion_fn=_entropy_criterion,
-            sample_weights=sample_weights,
-            min_criterion_reduction=min_info_gain,
-        )
-        node = trained_node if trained_node is not None else node
-        self._root_node = node
-
-    def predict(self, X) -> np.ndarray:
-        return _prob_to_class(self.predict_proba(X))
-
-    def predict_proba(self, X) -> np.ndarray:
-        if self._root_node is None:
-            raise ValueError("model must be trained before prediction")
-
-        y_pred = []
-        for x in X:
-            node = self._root_node
-
-            while isinstance(node, Node):
-                if x[node.feature_idx] < node.split_value:
-                    node = node.left
-                else:
-                    node = node.right
-
-            y_pred.append(node.value)
-
-        return np.array(y_pred)
-
-    def print_tree(self) -> None:
-        if self._root_node is None:
-            print("model is not trained")
-            return
-        print_tree(self._root_node)
-
-    def node_count(self) -> int:
-        if self._root_node is None:
-            return 0
-        return count_nodes(self._root_node)
 
 
 def _entropy(prob):
@@ -218,6 +164,102 @@ def split_node(
     return node
 
 
+class Estimator(Protocol):
+    def fit(self, X, y, sample_weights=None) -> None: ...
+
+    def predict(self, X) -> np.ndarray: ...
+
+    def predict_proba(self, X) -> np.ndarray: ...
+
+
+class DecisionTreeClassifier:
+    def __init__(self, max_depth: int, min_info_gain: float = 0) -> None:
+        self.max_depth = max_depth
+        self.min_info_gain = min_info_gain
+        self._root_node: Node | LeafNode | None = None
+
+    def fit(self, X, y, sample_weights=None) -> None:
+        y_oh = _one_hot_encode(y)
+        node = LeafNode(np.zeros(y_oh.shape[1]))
+        trained_node = split_node(
+            node,
+            X,
+            y_oh,
+            np.mean(y, axis=0),
+            depth=0,
+            max_depth=max_depth,
+            criterion_fn=_entropy_criterion,
+            sample_weights=sample_weights,
+            min_criterion_reduction=min_info_gain,
+        )
+        node = trained_node if trained_node is not None else node
+        self._root_node = node
+
+    def predict(self, X) -> np.ndarray:
+        return _prob_to_class(self.predict_proba(X))
+
+    def predict_proba(self, X) -> np.ndarray:
+        if self._root_node is None:
+            raise ValueError("model must be trained before prediction")
+
+        y_pred = []
+        for x in X:
+            node = self._root_node
+
+            while isinstance(node, Node):
+                if x[node.feature_idx] < node.split_value:
+                    node = node.left
+                else:
+                    node = node.right
+
+            y_pred.append(node.value)
+
+        return np.array(y_pred)
+
+    def print_tree(self) -> None:
+        if self._root_node is None:
+            print("model is not trained")
+            return
+        print_tree(self._root_node)
+
+    def node_count(self) -> int:
+        if self._root_node is None:
+            return 0
+        return count_nodes(self._root_node)
+
+
+class BaggingClassifier:
+    def __init__(
+        self,
+        estimator_constructor: Callable[[], Estimator],
+        n_estimators: int,
+        sample_proportion: float,
+    ) -> None:
+        self.estimator_constructor = estimator_constructor
+        self.n_estimators = n_estimators
+        self.sample_proportion = sample_proportion
+        self._estimators: list[Estimator] = []
+
+    def fit(self, X, y, sample_weights=None) -> None:
+        n = math.floor(X.shape[0] * self.sample_proportion)
+        self._estimators = []
+        for _ in range(self.n_estimators):
+            model = self.estimator_constructor()
+            model.fit(*_sample(X, y, n), sample_weights=sample_weights)
+            self._estimators.append(model)
+
+    def predict(self, X) -> np.ndarray:
+        return _prob_to_class(self.predict_proba(X))
+
+    def predict_proba(self, X) -> np.ndarray:
+        if not self._estimators:
+            raise ValueError("model must be trained before prediction")
+
+        preds = [model.predict_proba(X) for model in self._estimators]
+        pred_arr = np.stack(preds, axis=2)
+        return pred_arr.mean(axis=2)
+
+
 def _uniform_sample_weights(X):
     return np.ones((X.shape[0], 1)) / X.shape[0]
 
@@ -268,16 +310,6 @@ def _sample(X, y, sample_size: int) -> tuple[np.ndarray, np.ndarray]:
     y_sample = y[idx]
 
     return X_sample, y_sample
-
-
-def train_tree_bagging(
-    X, y, n_trees: int, sample_proportion: float, max_depth: int, min_info_gain: float
-):
-    n = math.floor(X.shape[0] * sample_proportion)
-    return [
-        train_classification_tree(*_sample(X, y, n), max_depth, min_info_gain)
-        for _ in range(n_trees)
-    ]
 
 
 def train_random_forest(
@@ -448,18 +480,16 @@ if __name__ == "__main__":
         f"tree -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f} with {tree.node_count()} nodes"
     )
 
-    # trees = train_tree_bagging(
-    #     X, y, 5, 0.5, max_depth=max_depth, min_info_gain=min_info_gain
-    # )
-    # pred_proba = predict_ensemble(trees, X)
-    # pred = prob_to_class(pred_proba)
-    # score = f1_score(y, pred, average="macro")
-    # acc = accuracy_score(y, pred)
-    # auc = roc_auc_score(y, pred_proba, multi_class="ovr")
-    # # for i, tree in enumerate(trees):
-    # #     print(f"-> tree {i+1}")
-    # #     print_tree(tree)
-    # print(f"bagging -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f}")
+    trees = BaggingClassifier(
+        lambda: DecisionTreeClassifier(max_depth, min_info_gain), 5, 0.5
+    )
+    trees.fit(X, y)
+    pred_proba = trees.predict_proba(X)
+    pred = trees.predict(X)
+    score = f1_score(y, pred, average="macro")
+    acc = accuracy_score(y, pred)
+    auc = roc_auc_score(y, pred_proba, multi_class="ovr")
+    print(f"bagging -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f}")
 
     # trees = train_random_forest(
     #     X, y, 5, 0.5, max_depth=max_depth, min_info_gain=min_info_gain

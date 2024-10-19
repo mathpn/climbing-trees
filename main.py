@@ -297,6 +297,9 @@ class RandomForestClassifier:
         return _prob_to_class(self.predict_proba(X))
 
     def predict_proba(self, X) -> np.ndarray:
+        if not self._trees:
+            raise ValueError("model must be trained before prediction")
+
         preds = [
             predict(tree, X[:, idx]) for tree, idx in zip(self._trees, self._col_idx)
         ]

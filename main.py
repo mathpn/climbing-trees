@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 import numpy as np
+from numpy.random import sample
 from sklearn.datasets import load_breast_cancer, load_wine
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 
@@ -260,6 +261,49 @@ class BaggingClassifier:
         return pred_arr.mean(axis=2)
 
 
+class RandomForestClassifier:
+    def __init__(
+        self,
+        n_estimators: int,
+        sample_proportion: float,
+        max_depth: int,
+        min_info_gain: float = 0,
+    ) -> None:
+        self.n_estimators = n_estimators
+        self.sample_proportion = sample_proportion
+        self.max_depth = max_depth
+        self.min_info_gain = min_info_gain
+        self._trees: list[Node | LeafNode] = []
+        self._col_idx: list[np.ndarray] = []
+
+    def fit(self, X, y) -> None:
+        n = math.floor(X.shape[0] * self.sample_proportion)
+        n_features = math.floor(math.sqrt(X.shape[1]))
+        self._trees = []
+        self._col_idx = []
+
+        for _ in range(self.n_estimators):
+            idx = np.random.choice(
+                np.arange(X.shape[1]), size=n_features, replace=False
+            )
+            X_sample = X[:, idx]
+            tree = train_classification_tree(
+                *_sample(X_sample, y, n), max_depth, min_info_gain
+            )
+            self._trees.append(tree)
+            self._col_idx.append(idx)
+
+    def predict(self, X) -> np.ndarray:
+        return _prob_to_class(self.predict_proba(X))
+
+    def predict_proba(self, X) -> np.ndarray:
+        preds = [
+            predict(tree, X[:, idx]) for tree, idx in zip(self._trees, self._col_idx)
+        ]
+        pred_arr = np.stack(preds, axis=2)
+        return pred_arr.mean(axis=2)
+
+
 def _uniform_sample_weights(X):
     return np.ones((X.shape[0], 1)) / X.shape[0]
 
@@ -480,29 +524,25 @@ if __name__ == "__main__":
         f"tree -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f} with {tree.node_count()} nodes"
     )
 
-    trees = BaggingClassifier(
+    bagging = BaggingClassifier(
         lambda: DecisionTreeClassifier(max_depth, min_info_gain), 5, 0.5
     )
-    trees.fit(X, y)
-    pred_proba = trees.predict_proba(X)
-    pred = trees.predict(X)
+    bagging.fit(X, y)
+    pred_proba = bagging.predict_proba(X)
+    pred = bagging.predict(X)
     score = f1_score(y, pred, average="macro")
     acc = accuracy_score(y, pred)
     auc = roc_auc_score(y, pred_proba, multi_class="ovr")
     print(f"bagging -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f}")
 
-    # trees = train_random_forest(
-    #     X, y, 5, 0.5, max_depth=max_depth, min_info_gain=min_info_gain
-    # )
-    # pred_proba = predict_random_forest(trees, X)
-    # pred = prob_to_class(pred_proba)
-    # score = f1_score(y, pred, average="macro")
-    # acc = accuracy_score(y, pred)
-    # auc = roc_auc_score(y, pred_proba, multi_class="ovr")
-    # # for i, tree in enumerate(trees):
-    # #     print(f"-> tree {i+1}")
-    # #     print_tree(tree)
-    # print(f"random forest -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f}")
+    random_forest = RandomForestClassifier(5, 0.5, max_depth, min_info_gain)
+    random_forest.fit(X, y)
+    pred_proba = random_forest.predict_proba(X)
+    pred = random_forest.predict(X)
+    score = f1_score(y, pred, average="macro")
+    acc = accuracy_score(y, pred)
+    auc = roc_auc_score(y, pred_proba, multi_class="ovr")
+    print(f"random forest -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f}")
 
     # trees = train_adaboost(X, y, 10)
     # pred_proba = predict_ensemble(trees, X)

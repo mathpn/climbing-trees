@@ -304,6 +304,40 @@ class RandomForestClassifier:
         return pred_arr.mean(axis=2)
 
 
+class AdaboostClassifier:
+    def __init__(
+        self,
+        estimator_constructor: Callable[[], Estimator],
+        n_estimators: int,
+        sample_proportion: float,
+    ) -> None:
+        self.estimator_constructor = estimator_constructor
+        self.n_estimators = n_estimators
+        self.sample_proportion = sample_proportion
+        self._estimators: list[Estimator] = []
+
+    def fit(self, X, y) -> None:
+        self._estimators = []
+        sample_weights = np.ones((X.shape[0], 1)) / X.shape[0]
+        for _ in range(self.n_estimators):
+            estimator = self.estimator_constructor()
+            estimator.fit(X, y, sample_weights=sample_weights)
+            self._estimators.append(estimator)
+            pred = estimator.predict(X)
+            sample_weights = _reweight_samples_adaboost(y, pred, sample_weights)
+
+    def predict(self, X) -> np.ndarray:
+        return _prob_to_class(self.predict_proba(X))
+
+    def predict_proba(self, X) -> np.ndarray:
+        if not self._estimators:
+            raise ValueError("model must be trained before prediction")
+
+        preds = [model.predict_proba(X) for model in self._estimators]
+        pred_arr = np.stack(preds, axis=2)
+        return pred_arr.mean(axis=2)
+
+
 def _uniform_sample_weights(X):
     return np.ones((X.shape[0], 1)) / X.shape[0]
 
@@ -544,16 +578,16 @@ if __name__ == "__main__":
     auc = roc_auc_score(y, pred_proba, multi_class="ovr")
     print(f"random forest -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f}")
 
-    # trees = train_adaboost(X, y, 10)
-    # pred_proba = predict_ensemble(trees, X)
-    # pred = prob_to_class(pred_proba)
-    # score = f1_score(y, pred, average="macro")
-    # acc = accuracy_score(y, pred)
-    # auc = roc_auc_score(y, pred_proba, multi_class="ovr")
-    # # for i, tree in enumerate(trees):
-    # #     print(f"-> tree {i+1}")
-    # #     print_tree(tree)
-    # print(f"AdaBoost -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f}")
+    adaboost = AdaboostClassifier(
+        lambda: DecisionTreeClassifier(max_depth, min_info_gain), 5, 0.5
+    )
+    adaboost.fit(X, y)
+    pred_proba = adaboost.predict_proba(X)
+    pred = adaboost.predict(X)
+    score = f1_score(y, pred, average="macro")
+    acc = accuracy_score(y, pred)
+    auc = roc_auc_score(y, pred_proba, multi_class="ovr")
+    print(f"AdaBoost -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f}")
 
     # trees = train_gradient_boosting(X, y, 10, 0.3)
     # pred_proba = predict_gradient_boosting(trees, X)

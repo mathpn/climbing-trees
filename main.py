@@ -390,6 +390,56 @@ class AdaboostClassifier:
         return pred_arr.mean(axis=2)
 
 
+class GradientBoostingClassifier:
+    def __init__(
+        self,
+        estimator_constructor: Callable[[], Estimator],
+        n_estimators: int,
+        learning_rate: float,
+    ) -> None:
+        self.estimator_constructor = estimator_constructor
+        self.n_estimators = n_estimators
+        self.learning_rate = learning_rate
+        self._estimators: list[Estimator] = []
+        self.base_value: np.ndarray | None = None
+
+    def fit(self, X, y) -> None:
+        self._estimators = []
+
+        y_oh = _one_hot_encode(y)
+        activation_fn = sigmoid if y_oh.shape[1] == 1 else softmax
+        raw_pred = np.zeros_like(y_oh, dtype=np.float32)
+        self.base_value = raw_pred  # XXX
+        prob = activation_fn(raw_pred)
+
+        for _ in range(self.n_estimators):
+            pseudo_residual = y_oh - prob
+            learner = self.estimator_constructor()
+            learner.fit(X, pseudo_residual)
+            learner_pred = learner.predict(X)
+            # TODO update predictions
+            raw_pred += self.learning_rate * learner_pred
+            prob = activation_fn(raw_pred)
+            self._estimators.append(learner)
+
+    def predict(self, X) -> np.ndarray:
+        return _prob_to_class(self.predict_proba(X))
+
+    def predict_proba(self, X) -> np.ndarray:
+        if not self._estimators or self.base_value is None:
+            raise ValueError("model must be trained before prediction")
+
+        pred = self.base_value + self.learning_rate * np.sum(
+            [learner.predict(X) for learner in self._estimators], axis=0
+        )
+        if pred.shape[1] == 1:
+            pred = sigmoid(pred)
+        else:
+            pred = softmax(pred)
+
+        return pred
+
+
 def _uniform_sample_weights(X):
     return np.ones((X.shape[0], 1)) / X.shape[0]
 

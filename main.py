@@ -170,6 +170,12 @@ class Estimator(Protocol):
 
     def predict(self, X) -> np.ndarray: ...
 
+
+class Classifier(Protocol):
+    def fit(self, X, y, sample_weights=None) -> None: ...
+
+    def predict(self, X) -> np.ndarray: ...
+
     def predict_proba(self, X) -> np.ndarray: ...
 
 
@@ -188,10 +194,10 @@ class DecisionTreeClassifier:
             y_oh,
             np.mean(y, axis=0),
             depth=0,
-            max_depth=max_depth,
+            max_depth=self.max_depth,
             criterion_fn=_entropy_criterion,
             sample_weights=sample_weights,
-            min_criterion_reduction=min_info_gain,
+            min_criterion_reduction=self.min_info_gain,
         )
         node = trained_node if trained_node is not None else node
         self._root_node = node
@@ -229,17 +235,60 @@ class DecisionTreeClassifier:
         return count_nodes(self._root_node)
 
 
+class DecisionTreeRegressor:
+    def __init__(
+        self, max_depth: int, min_info_gain: float = 0
+    ) -> None:  # XXX rename info_gain
+        self.max_depth = max_depth
+        self.min_info_gain = min_info_gain
+        self._root_node: Node | LeafNode | None = None
+
+    def fit(self, X, y, sample_weights=None) -> None:
+        node = LeafNode(np.zeros(y.shape[1]))
+        trained_node = split_node(
+            node,
+            X,
+            y,
+            np.mean(y, axis=0),
+            depth=0,
+            max_depth=self.max_depth,
+            criterion_fn=_mse_criterion,
+            min_criterion_reduction=self.min_info_gain,
+            sample_weights=sample_weights,
+        )
+        node = trained_node if trained_node is not None else node
+        self._root_node = node
+
+    def predict(self, X) -> np.ndarray:
+        if self._root_node is None:
+            raise ValueError("model must be trained before prediction")
+
+        y_pred = []
+        for x in X:
+            node = self._root_node
+
+            while isinstance(node, Node):
+                if x[node.feature_idx] < node.split_value:
+                    node = node.left
+                else:
+                    node = node.right
+
+            y_pred.append(node.value)
+
+        return np.array(y_pred)
+
+
 class BaggingClassifier:
     def __init__(
         self,
-        estimator_constructor: Callable[[], Estimator],
+        estimator_constructor: Callable[[], Classifier],
         n_estimators: int,
         sample_proportion: float,
     ) -> None:
         self.estimator_constructor = estimator_constructor
         self.n_estimators = n_estimators
         self.sample_proportion = sample_proportion
-        self._estimators: list[Estimator] = []
+        self._estimators: list[Classifier] = []
 
     def fit(self, X, y, sample_weights=None) -> None:
         n = math.floor(X.shape[0] * self.sample_proportion)
@@ -288,7 +337,7 @@ class RandomForestClassifier:
             )
             X_sample = X[:, idx]
             tree = train_classification_tree(
-                *_sample(X_sample, y, n), max_depth, min_info_gain
+                *_sample(X_sample, y, n), self.max_depth, self.min_info_gain
             )
             self._trees.append(tree)
             self._col_idx.append(idx)
@@ -310,14 +359,14 @@ class RandomForestClassifier:
 class AdaboostClassifier:
     def __init__(
         self,
-        estimator_constructor: Callable[[], Estimator],
+        estimator_constructor: Callable[[], Classifier],
         n_estimators: int,
         sample_proportion: float,
     ) -> None:
         self.estimator_constructor = estimator_constructor
         self.n_estimators = n_estimators
         self.sample_proportion = sample_proportion
-        self._estimators: list[Estimator] = []
+        self._estimators: list[Classifier] = []
 
     def fit(self, X, y) -> None:
         self._estimators = []
@@ -535,7 +584,7 @@ def count_nodes(node: Node | LeafNode):
     return 1 + count_nodes(node.left) + count_nodes(node.right)
 
 
-if __name__ == "__main__":
+def main():
     # n = 1000
     # X_0 = np.random.normal(0, size=n)
     # X_1 = np.random.normal(2, size=n)
@@ -592,13 +641,15 @@ if __name__ == "__main__":
     auc = roc_auc_score(y, pred_proba, multi_class="ovr")
     print(f"AdaBoost -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f}")
 
-    # trees = train_gradient_boosting(X, y, 10, 0.3)
-    # pred_proba = predict_gradient_boosting(trees, X)
-    # pred = _prob_to_class(pred_proba)
-    # score = f1_score(y, pred, average="macro")
-    # acc = accuracy_score(y, pred)
-    # auc = roc_auc_score(y, pred_proba, multi_class="ovr")
-    # # for i, tree in enumerate(trees):
-    # #     print(f"-> tree {i+1}")
-    # #     print_tree(tree)
-    # print(f"Gradient boosting -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f}")
+    boost = GradientBoostingClassifier(lambda: DecisionTreeRegressor(1, 0), 100, 0.3)
+    boost.fit(X, y)
+    pred_proba = boost.predict_proba(X)
+    pred = boost.predict(X)
+    score = f1_score(y, pred, average="macro")
+    acc = accuracy_score(y, pred)
+    auc = roc_auc_score(y, pred_proba, multi_class="ovr")
+    print(f"Gradient boosting -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f}")
+
+
+if __name__ == "__main__":
+    main()

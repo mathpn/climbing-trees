@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from typing import Protocol
 
 import numpy as np
-from numpy.random import sample
 from sklearn.datasets import load_breast_cancer, load_wine
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 
@@ -635,16 +634,8 @@ def count_nodes(node: Node | LeafNode):
 
 
 def main():
-    # n = 1000
-    # X_0 = np.random.normal(0, size=n)
-    # X_1 = np.random.normal(2, size=n)
-    # X_2 = np.random.normal(0, size=2 * n).reshape(-1, 1)
-    # X = np.concatenate((X_0, X_1)).reshape(-1, 1)
-    # X = np.concatenate((X_2, X), axis=1)
-    # y = np.repeat([0, 1], n)
-
-    # X, y = load_wine(return_X_y=True)
-    X, y = load_breast_cancer(return_X_y=True)
+    X, y = load_wine(return_X_y=True)
+    # X, y = load_breast_cancer(return_X_y=True)
     max_depth = 4
     min_info_gain = 0.1
 
@@ -680,9 +671,7 @@ def main():
     auc = roc_auc_score(y, pred_proba, multi_class="ovr")
     print(f"random forest -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f}")
 
-    adaboost = AdaboostClassifier(
-        lambda: DecisionTreeClassifier(max_depth, min_info_gain), 5, 0.5
-    )
+    adaboost = AdaboostClassifier(lambda: DecisionTreeClassifier(1, 0), 10, 0.5)
     adaboost.fit(X, y)
     pred_proba = adaboost.predict_proba(X)
     pred = adaboost.predict(X)
@@ -691,7 +680,7 @@ def main():
     auc = roc_auc_score(y, pred_proba, multi_class="ovr")
     print(f"AdaBoost -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f}")
 
-    boost = GradientBoostingClassifier(lambda: DecisionTreeRegressor(1, 0), 100, 0.3)
+    boost = GradientBoostingClassifier(lambda: DecisionTreeRegressor(1, 0), 10, 0.3)
     boost.fit(X, y)
     pred_proba = boost.predict_proba(X)
     pred = boost.predict(X)

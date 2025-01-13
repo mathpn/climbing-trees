@@ -25,9 +25,13 @@ class Node:
     right: Node | LeafNode
 
 
-def _entropy(prob):
+def entropy(prob):
     prob = prob[prob > 0]
     return np.sum(-prob * np.log2(prob))
+
+
+def gini_impurity(prob):
+    return 1 - np.sum(prob**2)
 
 
 def _class_probabilities(labels, sample_weights=None):
@@ -37,8 +41,12 @@ def _class_probabilities(labels, sample_weights=None):
     return (sample_weights * labels).sum(axis=0) / np.sum(sample_weights)
 
 
-def _entropy_criterion(y, sample_weights=None):
-    return _entropy(_class_probabilities(y, sample_weights))
+def entropy_criterion(labels, sample_weights=None):
+    return entropy(_class_probabilities(labels, sample_weights))
+
+
+def gini_criterion(labels, sample_weights=None):
+    return gini_impurity(_class_probabilities(labels, sample_weights))
 
 
 def _mse_criterion(y, sample_weights=None):
@@ -194,7 +202,7 @@ class DecisionTreeClassifier:
             np.mean(y, axis=0),
             depth=0,
             max_depth=self.max_depth,
-            criterion_fn=_entropy_criterion,
+            criterion_fn=gini_criterion,
             sample_weights=sample_weights,
             min_criterion_reduction=self.min_info_gain,
         )

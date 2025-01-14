@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, NamedTuple
 
 import numpy as np
 from sklearn.datasets import load_breast_cancer, load_wine
@@ -49,7 +49,7 @@ def gini_criterion(labels, sample_weights=None):
     return gini_impurity(_class_probabilities(labels, sample_weights))
 
 
-def _mse_criterion(y, sample_weights=None):
+def squared_loss_criterion(y, sample_weights=None):
     if sample_weights is None:
         sample_weights = np.ones_like(y) / y.shape[0]
 
@@ -66,11 +66,19 @@ def _one_hot_encode(arr):
     return one_hot
 
 
-def _find_best_split(X, y, criterion_fn, sample_weights):
-    min_criterion = 1e9
-    left_value = right_value = np.mean(y, axis=0)
-    best_split = best_feat = 0
-    best_left = best_right = None
+class Split(NamedTuple):
+    criterion: float
+    feature_idx: int
+    split_value: float
+    left_index: np.ndarray
+    right_index: np.ndarray
+    left_value: np.ndarray
+    right_value: np.ndarray
+
+
+def _find_best_split(X, y, criterion_fn, sample_weights) -> Split | None:
+    min_criterion = np.inf
+    split = None
 
     for feat_idx in range(X.shape[1]):
         feature = X[:, feat_idx]
@@ -84,27 +92,22 @@ def _find_best_split(X, y, criterion_fn, sample_weights):
             right = sort_idx[idx:]
             criterion_l = criterion_fn(y_sort[:idx], weights_sort[:idx])
             criterion_r = criterion_fn(y_sort[idx:], weights_sort[idx:])
-            p_l = (idx) / len(sort_idx)
+            p_l = idx / len(sort_idx)
             p_r = (len(sort_idx) - idx) / len(sort_idx)
             criterion = p_l * criterion_l + p_r * criterion_r
             if criterion < min_criterion:
                 min_criterion = criterion
-                best_split = feature_sort[idx]
-                best_feat = feat_idx
-                best_left = left
-                best_right = right
-                left_value = np.mean(y_sort[:idx], axis=0)
-                right_value = np.mean(y_sort[idx:], axis=0)
+                split = Split(
+                    criterion=criterion,
+                    feature_idx=feat_idx,
+                    split_value=feature_sort[idx],
+                    left_index=left,
+                    right_index=right,
+                    left_value=np.mean(y_sort[:idx], axis=0),
+                    right_value=np.mean(y_sort[idx:], axis=0),
+                )
 
-    return (
-        min_criterion,
-        best_feat,
-        best_split,
-        best_left,
-        best_right,
-        left_value,
-        right_value,
-    )
+    return split
 
 
 def split_node(
@@ -113,12 +116,13 @@ def split_node(
     y,
     value,
     depth,
-    max_depth,
     criterion_fn,
     sample_weights=None,
+    max_depth: int = 0,
+    min_samples_leaf: int = 0,
     min_criterion_reduction: float = 0,
-):
-    if X.shape[0] <= 1 or depth >= max_depth:
+) -> LeafNode | Node | None:
+    if X.shape[0] <= 1 or (max_depth and depth >= max_depth):
         return LeafNode(value)
 
     if sample_weights is None:
@@ -128,40 +132,54 @@ def split_node(
     if prior_criterion == 0:
         return LeafNode(value)
 
-    split_criterion, feat_idx, best_split, left, right, left_prob, right_prob = (
-        _find_best_split(X, y, criterion_fn, sample_weights)
-    )
-    info_gain = prior_criterion - split_criterion
-    if info_gain < min_criterion_reduction:
+    split = _find_best_split(X, y, criterion_fn, sample_weights)
+    if split is None:
         return None
 
-    X_left = X[left, :]
-    X_right = X[right, :]
-    y_left = y[left]
-    y_right = y[right]
-    node = Node(feat_idx, best_split, LeafNode(left_prob), LeafNode(right_prob))
+    criterion_reduction = prior_criterion - split.criterion
+    if criterion_reduction < min_criterion_reduction:
+        return None
+
+    X_left = X[split.left_index, :]
+    X_right = X[split.right_index, :]
+    y_left = y[split.left_index]
+    y_right = y[split.right_index]
+
+    if min_samples_leaf and (
+        X_left.shape[0] <= min_samples_leaf or X_right.shape[0] <= min_samples_leaf
+    ):
+        return None
+
+    node = Node(
+        split.feature_idx,
+        split.split_value,
+        LeafNode(split.left_value),
+        LeafNode(split.right_value),
+    )
 
     left = split_node(
-        node,
-        X_left,
-        y_left,
-        left_prob,
-        depth + 1,
-        max_depth,
-        criterion_fn,
-        sample_weights,
-        min_criterion_reduction,
+        node=node,
+        X=X_left,
+        y=y_left,
+        value=split.left_value,
+        depth=depth + 1,
+        criterion_fn=criterion_fn,
+        sample_weights=sample_weights,
+        max_depth=max_depth,
+        min_samples_leaf=min_samples_leaf,
+        min_criterion_reduction=min_criterion_reduction,
     )
     right = split_node(
-        node,
-        X_right,
-        y_right,
-        right_prob,
-        depth + 1,
-        max_depth,
-        criterion_fn,
-        sample_weights,
-        min_criterion_reduction,
+        node=node,
+        X=X_right,
+        y=y_right,
+        value=split.right_value,
+        depth=depth + 1,
+        criterion_fn=criterion_fn,
+        sample_weights=sample_weights,
+        max_depth=max_depth,
+        min_samples_leaf=min_samples_leaf,
+        min_criterion_reduction=min_criterion_reduction,
     )
 
     if left is not None:
@@ -172,7 +190,7 @@ def split_node(
     return node
 
 
-class Estimator(Protocol):
+class Regressor(Protocol):
     def fit(self, X, y, sample_weights=None) -> None: ...
 
     def predict(self, X) -> np.ndarray: ...
@@ -187,24 +205,31 @@ class Classifier(Protocol):
 
 
 class DecisionTreeClassifier:
-    def __init__(self, max_depth: int, min_info_gain: float = 0) -> None:
+    def __init__(
+        self,
+        max_depth: int,
+        min_samples_leaf: int = 0,
+        min_criterion_reduction: float = 0,
+    ) -> None:
         self.max_depth = max_depth
-        self.min_info_gain = min_info_gain
+        self.min_samples_leaf = min_samples_leaf
+        self.min_criterion_reduction = min_criterion_reduction
         self._root_node: Node | LeafNode | None = None
 
     def fit(self, X, y, sample_weights=None) -> None:
         y_oh = _one_hot_encode(y)
         node = LeafNode(np.zeros(y_oh.shape[1]))
         trained_node = split_node(
-            node,
-            X,
-            y_oh,
-            np.mean(y, axis=0),
+            node=node,
+            X=X,
+            y=y_oh,
+            value=np.mean(y, axis=0),
             depth=0,
-            max_depth=self.max_depth,
             criterion_fn=gini_criterion,
             sample_weights=sample_weights,
-            min_criterion_reduction=self.min_info_gain,
+            max_depth=self.max_depth,
+            min_samples_leaf=self.min_samples_leaf,
+            min_criterion_reduction=self.min_criterion_reduction,
         )
         node = trained_node if trained_node is not None else node
         self._root_node = node
@@ -259,7 +284,7 @@ class DecisionTreeRegressor:
             np.mean(y, axis=0),
             depth=0,
             max_depth=self.max_depth,
-            criterion_fn=_mse_criterion,
+            criterion_fn=squared_loss_criterion,
             min_criterion_reduction=self.min_info_gain,
             sample_weights=sample_weights,
         )
@@ -323,12 +348,10 @@ class RandomForestClassifier:
         n_estimators: int,
         sample_proportion: float,
         max_depth: int,
-        min_info_gain: float = 0,
     ) -> None:
         self.n_estimators = n_estimators
         self.sample_proportion = sample_proportion
         self.max_depth = max_depth
-        self.min_info_gain = min_info_gain
         self._trees: list[DecisionTreeClassifier] = []
         self._col_idx: list[np.ndarray] = []
 
@@ -343,7 +366,7 @@ class RandomForestClassifier:
                 np.arange(X.shape[1]), size=n_features, replace=False
             )
             X_sample = X[:, idx]
-            tree = DecisionTreeClassifier(self.max_depth, self.min_info_gain)
+            tree = DecisionTreeClassifier(self.max_depth)
             tree.fit(*_sample(X_sample, y, n))
             self._trees.append(tree)
             self._col_idx.append(idx)
@@ -400,14 +423,14 @@ class AdaboostClassifier:
 class GradientBoostingClassifier:
     def __init__(
         self,
-        estimator_constructor: Callable[[], Estimator],
+        estimator_constructor: Callable[[], Regressor],
         n_estimators: int,
         learning_rate: float,
     ) -> None:
         self.estimator_constructor = estimator_constructor
         self.n_estimators = n_estimators
         self.learning_rate = learning_rate
-        self._estimators: list[Estimator] = []
+        self._estimators: list[Regressor] = []
         self.base_value: np.ndarray | None = None
 
     def fit(self, X, y) -> None:
@@ -509,10 +532,10 @@ def count_nodes(node: Node | LeafNode):
 def main():
     X, y = load_wine(return_X_y=True)
     # X, y = load_breast_cancer(return_X_y=True)
-    max_depth = 4
-    min_info_gain = 0.1
+    max_depth = 100
+    min_samples_leaf = 5
 
-    tree = DecisionTreeClassifier(max_depth, min_info_gain)
+    tree = DecisionTreeClassifier(max_depth, min_samples_leaf)
     tree.fit(X, y)
     pred_proba = tree.predict_proba(X)
     pred = tree.predict(X)
@@ -525,7 +548,7 @@ def main():
     )
 
     bagging = BaggingClassifier(
-        lambda: DecisionTreeClassifier(max_depth, min_info_gain), 5, 0.5
+        lambda: DecisionTreeClassifier(max_depth, min_samples_leaf), 5, 0.5
     )
     bagging.fit(X, y)
     pred_proba = bagging.predict_proba(X)
@@ -535,7 +558,7 @@ def main():
     auc = roc_auc_score(y, pred_proba, multi_class="ovr")
     print(f"bagging -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f}")
 
-    random_forest = RandomForestClassifier(5, 0.5, max_depth, min_info_gain)
+    random_forest = RandomForestClassifier(5, 0.5, max_depth)
     random_forest.fit(X, y)
     pred_proba = random_forest.predict_proba(X)
     pred = random_forest.predict(X)

@@ -76,6 +76,50 @@ class Split(NamedTuple):
     right_value: np.ndarray
 
 
+def _find_best_split_classification(X, y, criterion_fn) -> Split | None:
+    min_criterion = np.inf
+    split = None
+    previous_split_value = None
+    y = y.astype(np.float64)
+
+    for feat_idx in range(X.shape[1]):
+        feature = X[:, feat_idx]
+        sort_idx = np.argsort(feature)
+        feature_sort = feature[sort_idx]
+        y_sort = y[sort_idx]
+        left_class_numbers = np.zeros(y.shape[1], dtype=np.float64)
+        right_class_numbers = np.sum(y, axis=0)
+
+        for idx in range(len(sort_idx) - 1):
+            left_class_numbers += y_sort[idx]
+            right_class_numbers -= y_sort[idx]
+
+            split_value = feature_sort[idx]
+            if previous_split_value == split_value:
+                continue
+            previous_split_value = split_value
+
+            criterion_l = criterion_fn(left_class_numbers / (idx + 1))
+            criterion_r = criterion_fn(right_class_numbers / (len(sort_idx) - idx - 1))
+
+            p_l = (idx + 1) / len(sort_idx)
+            p_r = (len(sort_idx) - idx - 1) / len(sort_idx)
+            criterion = p_l * criterion_l + p_r * criterion_r
+            if criterion < min_criterion:
+                left = sort_idx[: idx + 1]
+                right = sort_idx[idx + 1 :]
+                min_criterion = criterion
+                split = Split(
+                    criterion=criterion,
+                    feature_idx=feat_idx,
+                    split_value=split_value,
+                    left_index=left,
+                    right_index=right,
+                    left_value=np.mean(y_sort[: idx + 1], axis=0),
+                    right_value=np.mean(y_sort[idx + 1 :], axis=0),
+                )
+
+    return split
 def _find_best_split(X, y, criterion_fn, sample_weights) -> Split | None:
     min_criterion = np.inf
     split = None

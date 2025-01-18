@@ -3,11 +3,13 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol, NamedTuple
+from typing import Generic, NamedTuple, Protocol, TypeVar
 
 import numpy as np
-from sklearn.datasets import load_breast_cancer, load_wine
-from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
+from sklearn.datasets import (fetch_california_housing, load_breast_cancer,
+                              load_diabetes, load_wine)
+from sklearn.metrics import (accuracy_score, f1_score, mean_squared_error,
+                             roc_auc_score)
 
 EPS = 1e-6
 
@@ -25,6 +27,145 @@ class Node:
     right: Node | LeafNode
 
 
+@dataclass
+class BaseSplitStats:
+    left_weight: float
+    right_weight: float
+
+
+S = TypeVar("S", bound=BaseSplitStats)
+
+
+@dataclass
+class ClassificationSplitStats(BaseSplitStats):
+    left_class_count: np.ndarray
+    right_class_count: np.ndarray
+
+
+@dataclass
+class SquaredLossSplitStats(BaseSplitStats):
+    left_sum: np.ndarray
+    right_sum: np.ndarray
+    left_sum_squared: np.ndarray
+    right_sum_squared: np.ndarray
+
+
+class Criterion(Protocol, Generic[S]):
+    def node_impurity(self, y: np.ndarray, sample_weights: np.ndarray) -> float: ...
+
+    def node_optimal_value(self, y: np.ndarray) -> np.ndarray: ...
+
+    def init_split_stats(self, y: np.ndarray, sample_weights: np.ndarray) -> S: ...
+
+    def update_split_stats(
+        self, stats: S, y_value: np.ndarray, weight: float
+    ) -> None: ...
+
+    def split_impurity(self, stats: S) -> float: ...
+
+
+class ClassificationCriterion:
+    def __init__(self, objective_fn: Callable[[np.ndarray], float]):
+        self.objective = objective_fn
+
+    def node_optimal_value(self, y: np.ndarray) -> np.ndarray:
+        return np.mean(y, axis=0)
+
+    def node_impurity(self, y: np.ndarray, sample_weights: np.ndarray) -> float:
+        return self.objective(_class_probabilities(y, sample_weights))
+
+    def init_split_stats(
+        self, y: np.ndarray, sample_weights: np.ndarray
+    ) -> ClassificationSplitStats:
+        sample_weights = sample_weights.reshape((-1, 1))
+        return ClassificationSplitStats(
+            left_weight=0,
+            right_weight=np.sum(sample_weights),
+            left_class_count=np.zeros(y.shape[1], dtype=y.dtype),
+            right_class_count=np.sum(y * sample_weights, axis=0),
+        )
+
+    def update_split_stats(
+        self,
+        stats: ClassificationSplitStats,
+        y_value: np.ndarray,
+        weight: float,
+    ) -> None:
+        stats.left_weight += weight
+        stats.right_weight -= weight
+        stats.left_class_count += y_value * weight
+        stats.right_class_count -= y_value * weight
+
+    def split_impurity(self, stats: ClassificationSplitStats) -> float:
+        criterion_l = self.objective(stats.left_class_count / stats.left_weight)
+        criterion_r = self.objective(stats.right_class_count / stats.right_weight)
+
+        total_weight = stats.left_weight + stats.right_weight
+        p_l = stats.left_weight / total_weight
+        p_r = stats.right_weight / total_weight
+        return float(p_l * criterion_l + p_r * criterion_r)
+
+
+class SquaredLossCriterion(Criterion):
+    def node_impurity(self, y: np.ndarray, sample_weights: np.ndarray) -> float:
+        sample_weights = sample_weights.reshape(-1, 1)
+        weighted_mean = np.average(y, weights=sample_weights)
+        return float(np.average((y - weighted_mean) ** 2, weights=sample_weights))
+
+    def node_optimal_value(self, y: np.ndarray) -> np.ndarray:
+        return np.mean(y, axis=0)
+
+    def init_split_stats(
+        self, y: np.ndarray, sample_weights: np.ndarray
+    ) -> SquaredLossSplitStats:
+        sample_weights = sample_weights.reshape((-1, 1))
+        return SquaredLossSplitStats(
+            left_weight=0,
+            right_weight=np.sum(sample_weights),
+            left_sum=np.zeros(y.shape[1], dtype=y.dtype),
+            right_sum=np.sum(y * sample_weights, axis=0),
+            left_sum_squared=np.zeros(y.shape[1], dtype=y.dtype),
+            right_sum_squared=np.sum(y * y, axis=0),
+        )
+
+    def update_split_stats(
+        self,
+        stats: SquaredLossSplitStats,
+        y_value: np.ndarray,
+        weight: float,
+    ) -> None:
+        stats.left_sum += weight * y_value
+        stats.right_sum -= weight * y_value
+        stats.left_weight += weight
+        stats.right_weight -= weight
+        stats.left_sum_squared += weight * y_value * y_value
+        stats.right_sum_squared -= weight * y_value * y_value
+
+    def split_impurity(self, stats: SquaredLossSplitStats) -> float:
+        left_mean = stats.left_sum / stats.left_weight if stats.left_weight > 0 else 0
+        right_mean = (
+            stats.right_sum / stats.right_weight if stats.right_weight > 0 else 0
+        )
+
+        criterion_l = (
+            np.sum(stats.left_sum_squared / stats.left_weight - left_mean * left_mean)
+            if stats.left_weight > 0
+            else 0
+        )
+        criterion_r = (
+            np.sum(
+                stats.right_sum_squared / stats.right_weight - right_mean * right_mean
+            )
+            if stats.right_weight > 0
+            else 0
+        )
+
+        total_weight = stats.left_weight + stats.right_weight
+        p_l = stats.left_weight / total_weight
+        p_r = stats.right_weight / total_weight
+        return float(p_l * criterion_l + p_r * criterion_r)
+
+
 def entropy(prob):
     prob = prob[prob > 0]
     return np.sum(-prob * np.log2(prob))
@@ -38,28 +179,15 @@ def _class_probabilities(labels, sample_weights=None):
     if sample_weights is None:
         return np.mean(labels, axis=0)
 
+    sample_weights = sample_weights.reshape((-1, 1))
     return (sample_weights * labels).sum(axis=0) / np.sum(sample_weights)
 
 
-def entropy_criterion(labels, sample_weights=None):
-    return entropy(_class_probabilities(labels, sample_weights))
-
-
-def gini_criterion(labels, sample_weights=None):
-    return gini_impurity(_class_probabilities(labels, sample_weights))
-
-
-def squared_loss_criterion(y, sample_weights=None):
-    if sample_weights is None:
-        sample_weights = np.ones_like(y) / y.shape[0]
-
-    value = (sample_weights * y) / sample_weights.sum()
-    return np.mean(np.power(y - value, 2))
-
-
+# TODO improve
 def _one_hot_encode(arr):
-    if arr.max() == 1:
-        return arr.reshape(-1, 1)
+    # # XXX
+    # if arr.max() == 1:
+    #     return arr.reshape(-1, 1)
 
     one_hot = np.zeros((arr.size, arr.max() + 1), dtype=np.uint8)
     one_hot[np.arange(arr.size), arr] = 1
@@ -76,92 +204,48 @@ class Split(NamedTuple):
     right_value: np.ndarray
 
 
-def _find_best_split_classification(X, y, criterion_fn) -> Split | None:
-    min_criterion = np.inf
-    split = None
-    previous_split_value = None
-    y = y.astype(np.float64)
+def _find_best_split(
+    X, y, criterion: Criterion, sample_weights: np.ndarray
+) -> Split | None:
+    min_score = np.inf
+    best_split = None
 
     for feat_idx in range(X.shape[1]):
-        feature = X[:, feat_idx]
-        sort_idx = np.argsort(feature)
-        feature_sort = feature[sort_idx]
-        y_sort = y[sort_idx]
-        left_class_numbers = np.zeros(y.shape[1], dtype=np.float64)
-        right_class_numbers = np.sum(y, axis=0)
+        sort_idx = np.argsort(X[:, feat_idx])
+        x_sorted = X[sort_idx, feat_idx]
+        y_sorted = y[sort_idx]
+        weights_sorted = sample_weights[sort_idx]
 
-        for idx in range(len(sort_idx) - 1):
-            left_class_numbers += y_sort[idx]
-            right_class_numbers -= y_sort[idx]
+        stats = criterion.init_split_stats(y_sorted, weights_sorted)
 
-            split_value = feature_sort[idx]
-            if previous_split_value == split_value:
-                continue
-            previous_split_value = split_value
+        for i in range(1, len(y_sorted)):
+            criterion.update_split_stats(stats, y_sorted[i - 1], weights_sorted[i - 1])
+            if x_sorted[i] != x_sorted[i - 1]:
+                score = criterion.split_impurity(stats)
+                if score < min_score:
+                    min_score = score
+                    best_split = Split(
+                        criterion=min_score,
+                        feature_idx=feat_idx,
+                        split_value=x_sorted[i - 1],
+                        left_index=sort_idx[:i],
+                        right_index=sort_idx[i:],
+                        left_value=criterion.node_optimal_value(y_sorted[:i]),
+                        right_value=criterion.node_optimal_value(y_sorted[i:]),
+                    )
 
-            criterion_l = criterion_fn(left_class_numbers / (idx + 1))
-            criterion_r = criterion_fn(right_class_numbers / (len(sort_idx) - idx - 1))
-
-            p_l = (idx + 1) / len(sort_idx)
-            p_r = (len(sort_idx) - idx - 1) / len(sort_idx)
-            criterion = p_l * criterion_l + p_r * criterion_r
-            if criterion < min_criterion:
-                left = sort_idx[: idx + 1]
-                right = sort_idx[idx + 1 :]
-                min_criterion = criterion
-                split = Split(
-                    criterion=criterion,
-                    feature_idx=feat_idx,
-                    split_value=split_value,
-                    left_index=left,
-                    right_index=right,
-                    left_value=np.mean(y_sort[: idx + 1], axis=0),
-                    right_value=np.mean(y_sort[idx + 1 :], axis=0),
-                )
-
-    return split
-def _find_best_split(X, y, criterion_fn, sample_weights) -> Split | None:
-    min_criterion = np.inf
-    split = None
-
-    for feat_idx in range(X.shape[1]):
-        feature = X[:, feat_idx]
-        sort_idx = np.argsort(feature)
-        feature_sort = feature[sort_idx]
-        y_sort = y[sort_idx]
-        weights_sort = sample_weights[sort_idx]
-
-        for idx in range(1, len(sort_idx)):
-            left = sort_idx[:idx]
-            right = sort_idx[idx:]
-            criterion_l = criterion_fn(y_sort[:idx], weights_sort[:idx])
-            criterion_r = criterion_fn(y_sort[idx:], weights_sort[idx:])
-            p_l = idx / len(sort_idx)
-            p_r = (len(sort_idx) - idx) / len(sort_idx)
-            criterion = p_l * criterion_l + p_r * criterion_r
-            if criterion < min_criterion:
-                min_criterion = criterion
-                split = Split(
-                    criterion=criterion,
-                    feature_idx=feat_idx,
-                    split_value=feature_sort[idx],
-                    left_index=left,
-                    right_index=right,
-                    left_value=np.mean(y_sort[:idx], axis=0),
-                    right_value=np.mean(y_sort[idx:], axis=0),
-                )
-
-    return split
+    return best_split
 
 
+# FIXME min_samples_leaf must be past of split search?
 def split_node(
     node,
     X,
     y,
     value,
     depth,
-    criterion_fn,
-    sample_weights=None,
+    criterion: Criterion,
+    sample_weights: np.ndarray,
     max_depth: int = 0,
     min_samples_leaf: int = 0,
     min_criterion_reduction: float = 0,
@@ -169,19 +253,16 @@ def split_node(
     if X.shape[0] <= 1 or (max_depth and depth >= max_depth):
         return LeafNode(value)
 
-    if sample_weights is None:
-        sample_weights = _uniform_sample_weights(X)
-
-    prior_criterion = criterion_fn(y)
+    prior_criterion = criterion.node_impurity(y, sample_weights)
     if prior_criterion == 0:
         return LeafNode(value)
 
-    split = _find_best_split(X, y, criterion_fn, sample_weights)
+    split = _find_best_split(X, y, criterion, sample_weights)
     if split is None:
         return None
 
     criterion_reduction = prior_criterion - split.criterion
-    if criterion_reduction < min_criterion_reduction:
+    if criterion_reduction and criterion_reduction < min_criterion_reduction:
         return None
 
     X_left = X[split.left_index, :]
@@ -190,7 +271,7 @@ def split_node(
     y_right = y[split.right_index]
 
     if min_samples_leaf and (
-        X_left.shape[0] <= min_samples_leaf or X_right.shape[0] <= min_samples_leaf
+        X_left.shape[0] < min_samples_leaf or X_right.shape[0] < min_samples_leaf
     ):
         return None
 
@@ -207,8 +288,8 @@ def split_node(
         y=y_left,
         value=split.left_value,
         depth=depth + 1,
-        criterion_fn=criterion_fn,
-        sample_weights=sample_weights,
+        criterion=criterion,
+        sample_weights=sample_weights[split.left_index],
         max_depth=max_depth,
         min_samples_leaf=min_samples_leaf,
         min_criterion_reduction=min_criterion_reduction,
@@ -219,8 +300,8 @@ def split_node(
         y=y_right,
         value=split.right_value,
         depth=depth + 1,
-        criterion_fn=criterion_fn,
-        sample_weights=sample_weights,
+        criterion=criterion,
+        sample_weights=sample_weights[split.right_index],
         max_depth=max_depth,
         min_samples_leaf=min_samples_leaf,
         min_criterion_reduction=min_criterion_reduction,
@@ -260,16 +341,19 @@ class DecisionTreeClassifier:
         self.min_criterion_reduction = min_criterion_reduction
         self._root_node: Node | LeafNode | None = None
 
-    def fit(self, X, y, sample_weights=None) -> None:
+    def fit(self, X, y, sample_weights: np.ndarray | None = None) -> None:
+        if sample_weights is None:
+            sample_weights = np.ones(X.shape[0], dtype=int)
+
         y_oh = _one_hot_encode(y)
-        node = LeafNode(np.zeros(y_oh.shape[1]))
+        node = LeafNode(np.mean(y_oh, axis=0))
         trained_node = split_node(
             node=node,
             X=X,
             y=y_oh,
             value=np.mean(y, axis=0),
             depth=0,
-            criterion_fn=gini_criterion,
+            criterion=ClassificationCriterion(gini_impurity),
             sample_weights=sample_weights,
             max_depth=self.max_depth,
             min_samples_leaf=self.min_samples_leaf,
@@ -290,7 +374,7 @@ class DecisionTreeClassifier:
             node = self._root_node
 
             while isinstance(node, Node):
-                if x[node.feature_idx] < node.split_value:
+                if x[node.feature_idx] <= node.split_value:
                     node = node.left
                 else:
                     node = node.right
@@ -313,24 +397,35 @@ class DecisionTreeClassifier:
 
 class DecisionTreeRegressor:
     def __init__(
-        self, max_depth: int, min_info_gain: float = 0
-    ) -> None:  # XXX rename info_gain
+        self,
+        max_depth: int,
+        min_samples_leaf: int = 0,
+        min_criterion_reduction: float = 0,
+    ) -> None:
         self.max_depth = max_depth
-        self.min_info_gain = min_info_gain
+        self.min_samples_leaf = min_samples_leaf
+        self.min_criterion_reduction = min_criterion_reduction
         self._root_node: Node | LeafNode | None = None
 
     def fit(self, X, y, sample_weights=None) -> None:
-        node = LeafNode(np.zeros(y.shape[1]))
+        if sample_weights is None:
+            sample_weights = np.ones(X.shape[0], dtype=int)
+
+        if y.ndim == 1:
+            y = y.reshape((-1, 1))
+
+        node = LeafNode(np.mean(y, axis=0))
         trained_node = split_node(
-            node,
-            X,
-            y,
-            np.mean(y, axis=0),
+            node=node,
+            X=X,
+            y=y,
+            value=np.mean(y, axis=0),
             depth=0,
-            max_depth=self.max_depth,
-            criterion_fn=squared_loss_criterion,
-            min_criterion_reduction=self.min_info_gain,
+            criterion=SquaredLossCriterion(),
             sample_weights=sample_weights,
+            max_depth=self.max_depth,
+            min_samples_leaf=self.min_samples_leaf,
+            min_criterion_reduction=self.min_criterion_reduction,
         )
         node = trained_node if trained_node is not None else node
         self._root_node = node
@@ -344,7 +439,7 @@ class DecisionTreeRegressor:
             node = self._root_node
 
             while isinstance(node, Node):
-                if x[node.feature_idx] < node.split_value:
+                if x[node.feature_idx] <= node.split_value:
                     node = node.left
                 else:
                     node = node.right
@@ -514,10 +609,6 @@ class GradientBoostingClassifier:
         return pred
 
 
-def _uniform_sample_weights(X):
-    return np.ones((X.shape[0], 1)) / X.shape[0]
-
-
 def _sample(X, y, sample_size: int) -> tuple[np.ndarray, np.ndarray]:
     idx = np.random.choice(range(X.shape[0]), size=sample_size, replace=True)
 
@@ -574,22 +665,70 @@ def count_nodes(node: Node | LeafNode):
 
 
 def main():
-    X, y = load_wine(return_X_y=True)
-    # X, y = load_breast_cancer(return_X_y=True)
-    max_depth = 100
-    min_samples_leaf = 5
+    import random
+
+    from sklearn.tree import DecisionTreeClassifier as DTC
+    from sklearn.tree import DecisionTreeRegressor as DTR
+    from sklearn.tree import plot_tree
+
+    random.seed(42)
+    np.random.seed(42)
+    # X, y = load_wine(return_X_y=True)
+    X, y = load_breast_cancer(return_X_y=True)
+    # X = np.random.random(size=(20, 4))
+    # y = np.array([0] * 10 + [1] * 10)
+    # print(X)
+    # print(y)
+    max_depth = 6
+    min_samples_leaf = 1
 
     tree = DecisionTreeClassifier(max_depth, min_samples_leaf)
     tree.fit(X, y)
     pred_proba = tree.predict_proba(X)
     pred = tree.predict(X)
+    print(y)
+    print(pred)
     score = f1_score(y, pred, average="macro")
     acc = accuracy_score(y, pred)
-    auc = roc_auc_score(y, pred_proba, multi_class="ovr")
+    node_count = tree.node_count()
     tree.print_tree()
-    print(
-        f"tree -> F1: {score:.2f} accuracy: {acc:.2%} AUC {auc:.2f} with {tree.node_count()} nodes"
-    )
+    print(f"tree -> F1: {score:.2f} accuracy: {acc:.2%} with {node_count} nodes")
+
+    tree = DTC(max_depth=max_depth, min_samples_leaf=min_samples_leaf)
+    tree.fit(X, y)
+    pred_proba = tree.predict_proba(X)
+    pred = tree.predict(X)
+    print(y)
+    print(pred)
+    score = f1_score(y, pred, average="macro")
+    acc = accuracy_score(y, pred)
+    print(f"tree -> F1: {score:.2f} accuracy: {acc:.2%}")
+    plot_tree(tree)
+    import matplotlib.pyplot as plt
+
+    plt.savefig("tree.svg")
+
+    X, y = load_diabetes(return_X_y=True)
+    # X = np.random.random((len(y), 4))
+    # X = np.array([[1, 1, 2, 2], [1, 2, 3, 4]]).T
+    # y = np.array([0, 0, 1, 1])
+    # print(X)
+    # print(y)
+
+    tree = DecisionTreeRegressor(max_depth, min_samples_leaf)
+    tree.fit(X, y)
+    pred = tree.predict(X)
+    mse = mean_squared_error(y, pred)
+    print(f"tree -> MSE: {mse:.2f} baseline = {np.mean((y - np.mean(y)) ** 2):.2f}")
+    # print_tree(tree._root_node)
+
+    tree = DTR(max_depth=max_depth, min_samples_leaf=min_samples_leaf)
+    tree.fit(X, y)
+    pred = tree.predict(X)
+    mse = mean_squared_error(y, pred)
+    print(f"tree -> MSE: {mse:.2f} baseline = {np.mean((y - np.mean(y)) ** 2):.2f}")
+    # print_tree(tree._root_node)
+    return
 
     bagging = BaggingClassifier(
         lambda: DecisionTreeClassifier(max_depth, min_samples_leaf), 5, 0.5

@@ -77,7 +77,7 @@ class ClassificationCriterion:
             left_weight=0,
             right_weight=np.sum(sample_weights),
             left_class_count=np.zeros(y.shape[1], dtype=y.dtype),
-            right_class_count=np.sum(y * sample_weights, axis=0),
+            right_class_count=np.sum(y * sample_weights, axis=0, dtype=y.dtype),
         )
 
     def update_split_stats(

@@ -206,27 +206,61 @@ def _find_best_split(
     best_split = None
 
     for feat_idx in range(X.shape[1]):
-        sort_idx = np.argsort(X[:, feat_idx])
-        x_sorted = X[sort_idx, feat_idx]
-        y_sorted = y[sort_idx]
-        weights_sorted = sample_weights[sort_idx]
+        if np.issubdtype(X.iloc[:, feat_idx].dtype, np.number):
+            sort_idx = np.argsort(X.iloc[:, feat_idx])
+            x_sorted = X.iloc[sort_idx, feat_idx].values
+            y_sorted = y[sort_idx]
+            weights_sorted = sample_weights[sort_idx]
 
-        stats = criterion.init_split_stats(y_sorted, weights_sorted)
+            stats = criterion.init_split_stats(y_sorted, weights_sorted)
 
-        for i in range(1, len(y_sorted)):
-            criterion.update_split_stats(stats, y_sorted[i - 1], weights_sorted[i - 1])
-            if x_sorted[i] != x_sorted[i - 1]:
-                score = criterion.split_impurity(stats)
+            for i in range(1, len(y_sorted)):
+                criterion.update_split_stats(
+                    stats, y_sorted[i - 1], weights_sorted[i - 1]
+                )
+                if x_sorted[i] != x_sorted[i - 1]:
+                    score = criterion.split_impurity(stats)
+                    if score < min_score:
+                        min_score = score
+                        best_split = Split(
+                            criterion=min_score,
+                            feature_idx=feat_idx,
+                            split_value=x_sorted[i - 1],
+                            left_index=sort_idx[:i],
+                            right_index=sort_idx[i:],
+                            left_value=criterion.node_optimal_value(y_sorted[:i]),
+                            right_value=criterion.node_optimal_value(y_sorted[i:]),
+                        )
+        else:
+            unique_values = np.unique(X.iloc[:, feat_idx])
+            for value in unique_values:
+                left_index = X.iloc[:, feat_idx] == value
+                right_index = ~left_index
+
+                if np.sum(left_index) == 0 or np.sum(right_index) == 0:
+                    continue
+
+                y_left = y[left_index]
+                y_right = y[right_index]
+                weights_left = sample_weights[left_index]
+                weights_right = sample_weights[right_index]
+
+                # TODO improve
+                criterion_l = criterion.node_impurity(y_left, weights_left)
+                criterion_r = criterion.node_impurity(y_right, weights_right)
+                score = np.sum(weights_left) * criterion_l + np.sum(
+                    weights_right
+                ) * criterion_r / (np.sum(weights_left) + np.sum(weights_right))
                 if score < min_score:
                     min_score = score
                     best_split = Split(
                         criterion=min_score,
                         feature_idx=feat_idx,
-                        split_value=x_sorted[i - 1],
-                        left_index=sort_idx[:i],
-                        right_index=sort_idx[i:],
-                        left_value=criterion.node_optimal_value(y_sorted[:i]),
-                        right_value=criterion.node_optimal_value(y_sorted[i:]),
+                        split_value=value,
+                        left_index=np.where(left_index)[0],
+                        right_index=np.where(right_index)[0],
+                        left_value=criterion.node_optimal_value(y_left),
+                        right_value=criterion.node_optimal_value(y_right),
                     )
 
     return best_split
@@ -260,8 +294,8 @@ def split_node(
     if criterion_reduction and criterion_reduction < min_criterion_reduction:
         return None
 
-    X_left = X[split.left_index, :]
-    X_right = X[split.right_index, :]
+    X_left = X.iloc[split.left_index, :]
+    X_right = X.iloc[split.right_index, :]
     y_left = y[split.left_index]
     y_right = y[split.right_index]
 
@@ -315,9 +349,15 @@ def print_tree(node: Node | LeafNode, depth: int = 0):
     if isinstance(node, LeafNode):
         print(f"{indent}LeafNode(value={np.array_str(node.value, precision=2)})")
     else:
-        print(
-            f"{indent}Node(feature_idx={node.feature_idx}, split_value={node.split_value:.2f})"
-        )
+        if isinstance(node.split_value, (float, int)):
+            print(
+                f"{indent}Node(feature_idx={node.feature_idx}, split_value={node.split_value:.2f})"
+            )
+        else:
+            print(
+                f"{indent}Node(feature_idx={node.feature_idx}, split_value={node.split_value})"
+            )
+
         print(f"{indent}Left:")
         print_tree(node.left, depth + 1)
         print(f"{indent}Right:")
@@ -393,11 +433,11 @@ class DecisionTreeClassifier:
             raise ValueError("model must be trained before prediction")
 
         y_pred = []
-        for x in X:
+        for _, x in X.iterrows():
             node = self._root_node
 
             while isinstance(node, Node):
-                if x[node.feature_idx] <= node.split_value:
+                if x.iloc[node.feature_idx] <= node.split_value:
                     node = node.left
                 else:
                     node = node.right

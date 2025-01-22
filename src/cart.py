@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pandas as pd
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Generic, NamedTuple, Protocol, TypeVar
@@ -67,6 +68,9 @@ class ClassificationCriterion:
         return np.mean(y, axis=0)
 
     def node_impurity(self, y: np.ndarray, sample_weights: np.ndarray) -> float:
+        # XXX explain
+        if y.shape[1] == 1:
+            y = np.hstack((y, 1 - y))
         return self.objective(_class_probabilities(y, sample_weights))
 
     def init_split_stats(
@@ -180,9 +184,9 @@ def _class_probabilities(labels, sample_weights=None):
 
 # TODO improve
 def _one_hot_encode(arr):
-    # # XXX
-    # if arr.max() == 1:
-    #     return arr.reshape(-1, 1)
+    # XXX
+    if arr.max() == 1:
+        return arr.reshape(-1, 1)
 
     one_hot = np.zeros((arr.size, arr.max() + 1), dtype=np.uint8)
     one_hot[np.arange(arr.size), arr] = 1
@@ -199,69 +203,154 @@ class Split(NamedTuple):
     right_value: np.ndarray
 
 
+def _best_numerical_split(
+    x: np.ndarray,
+    y: np.ndarray,
+    feat_idx: int,
+    min_score: float,
+    criterion: Criterion,
+    sample_weights: np.ndarray,
+) -> tuple[float, Split | None]:
+    best_split = None
+    sort_idx = np.argsort(x)
+    x_sorted = x[sort_idx]
+    y_sorted = y[sort_idx]
+    weights_sorted = sample_weights[sort_idx]
+
+    stats = criterion.init_split_stats(y_sorted, weights_sorted)
+
+    for i in range(1, len(y_sorted)):
+        criterion.update_split_stats(stats, y_sorted[i - 1], weights_sorted[i - 1])
+        if x_sorted[i] != x_sorted[i - 1]:
+            score = criterion.split_impurity(stats)
+            if score < min_score:
+                min_score = score
+                best_split = Split(
+                    criterion=min_score,
+                    feature_idx=feat_idx,
+                    split_value=x_sorted[i - 1],
+                    left_index=sort_idx[:i],
+                    right_index=sort_idx[i:],
+                    left_value=criterion.node_optimal_value(y_sorted[:i]),
+                    right_value=criterion.node_optimal_value(y_sorted[i:]),
+                )
+
+    return min_score, best_split
+
+
+def _best_categorical_split(
+    x: np.ndarray,
+    y: np.ndarray,
+    feat_idx: int,
+    min_score: float,
+    criterion: Criterion,
+    sample_weights: np.ndarray,
+):
+    best_split = None
+    unique_values = np.unique(x)
+    for value in unique_values:
+        left_index = x == value
+        right_index = ~left_index
+
+        if np.sum(left_index) == 0 or np.sum(right_index) == 0:
+            continue
+
+        y_left = y[left_index]
+        y_right = y[right_index]
+        weights_left = sample_weights[left_index]
+        weights_right = sample_weights[right_index]
+
+        # TODO improve
+        criterion_l = criterion.node_impurity(y_left, weights_left)
+        criterion_r = criterion.node_impurity(y_right, weights_right)
+        score = np.sum(weights_left) * criterion_l + np.sum(
+            weights_right
+        ) * criterion_r / (np.sum(weights_left) + np.sum(weights_right))
+        if score < min_score:
+            min_score = score
+            best_split = Split(
+                criterion=min_score,
+                feature_idx=feat_idx,
+                split_value=value,
+                left_index=np.where(left_index)[0],
+                right_index=np.where(right_index)[0],
+                left_value=criterion.node_optimal_value(y_left),
+                right_value=criterion.node_optimal_value(y_right),
+            )
+            print(best_split)
+
+    return min_score, best_split
+
+
+def _best_categorical_optimal_partitioning(
+    x: np.ndarray,
+    y: np.ndarray,
+    feat_idx: int,
+    min_score: float,
+    criterion: Criterion,
+    sample_weights: np.ndarray,
+):
+    best_split = None
+    # XXX sample_weights
+    groups = (
+        pd.DataFrame({"x": x, "y": y.ravel(), "w": sample_weights})
+        .groupby("x")
+        .agg({"y": "mean", "w": "sum"})
+        .sort_values(by="y")
+    )
+    stats = criterion.init_split_stats(y.astype(np.float64), sample_weights)
+
+    for i in range(len(groups) - 1):
+        criterion.update_split_stats(stats, groups["y"].iloc[i], groups["w"].iloc[i])
+        score = criterion.split_impurity(stats)
+        if score < min_score:
+            min_score = score
+            # XXX optimize
+            best_split = Split(
+                criterion=min_score,
+                feature_idx=feat_idx,
+                split_value=groups.index.values[: i + 1],
+                left_index=np.where(np.isin(x, groups.index[: i + 1]))[0],
+                right_index=np.where(np.isin(x, groups.index[i + 1 :]))[0],
+                left_value=criterion.node_optimal_value(
+                    y[np.isin(x, groups.index[: i + 1])]
+                ),
+                right_value=criterion.node_optimal_value(
+                    y[np.isin(x, groups.index[i + 1 :])]
+                ),
+            )
+
+    return min_score, best_split
+
+
 def _find_best_split(
-    X, y, criterion: Criterion, sample_weights: np.ndarray
+    X: pd.DataFrame, y: np.ndarray, criterion: Criterion, sample_weights: np.ndarray
 ) -> Split | None:
     min_score = np.inf
     best_split = None
 
+    categorical_splitter = (
+        _best_categorical_optimal_partitioning
+        if y.shape[1] == 1
+        else _best_categorical_split
+        # _best_categorical_split
+    )
+
     for feat_idx in range(X.shape[1]):
-        if np.issubdtype(X.iloc[:, feat_idx].dtype, np.number):
-            sort_idx = np.argsort(X.iloc[:, feat_idx])
-            x_sorted = X.iloc[sort_idx, feat_idx].values
-            y_sorted = y[sort_idx]
-            weights_sorted = sample_weights[sort_idx]
-
-            stats = criterion.init_split_stats(y_sorted, weights_sorted)
-
-            for i in range(1, len(y_sorted)):
-                criterion.update_split_stats(
-                    stats, y_sorted[i - 1], weights_sorted[i - 1]
-                )
-                if x_sorted[i] != x_sorted[i - 1]:
-                    score = criterion.split_impurity(stats)
-                    if score < min_score:
-                        min_score = score
-                        best_split = Split(
-                            criterion=min_score,
-                            feature_idx=feat_idx,
-                            split_value=x_sorted[i - 1],
-                            left_index=sort_idx[:i],
-                            right_index=sort_idx[i:],
-                            left_value=criterion.node_optimal_value(y_sorted[:i]),
-                            right_value=criterion.node_optimal_value(y_sorted[i:]),
-                        )
-        else:
-            unique_values = np.unique(X.iloc[:, feat_idx])
-            for value in unique_values:
-                left_index = X.iloc[:, feat_idx] == value
-                right_index = ~left_index
-
-                if np.sum(left_index) == 0 or np.sum(right_index) == 0:
-                    continue
-
-                y_left = y[left_index]
-                y_right = y[right_index]
-                weights_left = sample_weights[left_index]
-                weights_right = sample_weights[right_index]
-
-                # TODO improve
-                criterion_l = criterion.node_impurity(y_left, weights_left)
-                criterion_r = criterion.node_impurity(y_right, weights_right)
-                score = np.sum(weights_left) * criterion_l + np.sum(
-                    weights_right
-                ) * criterion_r / (np.sum(weights_left) + np.sum(weights_right))
-                if score < min_score:
-                    min_score = score
-                    best_split = Split(
-                        criterion=min_score,
-                        feature_idx=feat_idx,
-                        split_value=value,
-                        left_index=np.where(left_index)[0],
-                        right_index=np.where(right_index)[0],
-                        left_value=criterion.node_optimal_value(y_left),
-                        right_value=criterion.node_optimal_value(y_right),
-                    )
+        splitter = (
+            _best_numerical_split
+            if np.issubdtype(X.iloc[:, feat_idx].dtype, np.number)
+            else categorical_splitter
+        )
+        min_score, split = splitter(
+            X.iloc[:, feat_idx].values,
+            y,
+            feat_idx,
+            min_score,
+            criterion,
+            sample_weights,
+        )
+        best_split = split or best_split
 
     return best_split
 
@@ -291,7 +380,8 @@ def split_node(
         return None
 
     criterion_reduction = prior_criterion - split.criterion
-    if criterion_reduction and criterion_reduction < min_criterion_reduction:
+    # XXX fix in text min_
+    if min_criterion_reduction and criterion_reduction < min_criterion_reduction:
         return None
 
     X_left = X.iloc[split.left_index, :]

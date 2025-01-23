@@ -15,10 +15,13 @@ class LeafNode:
     value: np.ndarray
 
 
+type split_value = float | set
+
+
 @dataclass
 class Node:
     feature_idx: int
-    split_value: float
+    split_value: split_value
     left: Node | LeafNode
     right: Node | LeafNode
 
@@ -59,8 +62,14 @@ class Criterion(Protocol, Generic[S]):
 
     def split_impurity(self, stats: S) -> float: ...
 
+    def update_stats_from_categorical_group(
+        self, stats: S, y: np.ndarray, sample_weights: np.ndarray, is_left: bool
+    ) -> None: ...
+
 
 class ClassificationCriterion:
+    """Criterion for classification trees."""
+
     def __init__(self, objective_fn: Callable[[np.ndarray], float]):
         self.objective = objective_fn
 
@@ -80,8 +89,10 @@ class ClassificationCriterion:
         return ClassificationSplitStats(
             left_weight=0,
             right_weight=np.sum(sample_weights),
-            left_class_count=np.zeros(y.shape[1], dtype=y.dtype),
-            right_class_count=np.sum(y * sample_weights, axis=0, dtype=y.dtype),
+            left_class_count=np.zeros(y.shape[1], dtype=sample_weights.dtype),
+            right_class_count=np.sum(
+                y * sample_weights, axis=0, dtype=sample_weights.dtype
+            ),
         )
 
     def update_split_stats(
@@ -104,8 +115,32 @@ class ClassificationCriterion:
         p_r = stats.right_weight / total_weight
         return float(p_l * criterion_l + p_r * criterion_r)
 
+    def update_stats_from_categorical_group(
+        self,
+        stats: ClassificationSplitStats,
+        y: np.ndarray,
+        sample_weights: np.ndarray,
+        is_left: bool,
+    ) -> None:
+        group_weights = sample_weights.reshape(-1, 1)
+        group_sum = np.sum(y * group_weights, axis=0)
+        group_weight = np.sum(sample_weights)
+
+        if is_left:
+            stats.left_weight = group_weight
+            stats.right_weight = stats.right_weight - group_weight
+            stats.left_class_count = group_sum
+            stats.right_class_count -= group_sum
+        else:
+            stats.right_weight = group_weight
+            stats.left_weight = stats.left_weight - group_weight
+            stats.right_class_count = group_sum
+            stats.left_class_count -= group_sum
+
 
 class SquaredLossCriterion(Criterion):
+    """Criterion for regression trees using squared loss."""
+
     def node_impurity(self, y: np.ndarray, sample_weights: np.ndarray) -> float:
         sample_weights = sample_weights.reshape(-1, 1)
         weighted_mean = np.average(y, weights=sample_weights)
@@ -164,6 +199,33 @@ class SquaredLossCriterion(Criterion):
         p_r = stats.right_weight / total_weight
         return float(p_l * criterion_l + p_r * criterion_r)
 
+    def update_stats_from_categorical_group(
+        self,
+        stats: SquaredLossSplitStats,
+        y: np.ndarray,
+        sample_weights: np.ndarray,
+        is_left: bool,
+    ) -> None:
+        group_weights = sample_weights.reshape(-1, 1)
+        group_sum = np.sum(y * group_weights, axis=0)
+        group_sum_squared = np.sum(y * y * group_weights, axis=0)
+        group_weight = np.sum(sample_weights)
+
+        if is_left:
+            stats.left_weight = group_weight
+            stats.right_weight = stats.right_weight - group_weight
+            stats.left_sum = group_sum
+            stats.right_sum -= group_sum
+            stats.left_sum_squared = group_sum_squared
+            stats.right_sum_squared -= group_sum_squared
+        else:
+            stats.right_weight = group_weight
+            stats.left_weight = stats.left_weight - group_weight
+            stats.right_sum = group_sum
+            stats.left_sum -= group_sum
+            stats.right_sum_squared = group_sum_squared
+            stats.left_sum_squared -= group_sum_squared
+
 
 def entropy(prob):
     prob = prob[prob > 0]
@@ -182,9 +244,7 @@ def _class_probabilities(labels, sample_weights=None):
     return (sample_weights * labels).sum(axis=0) / np.sum(sample_weights)
 
 
-# TODO improve
-def _one_hot_encode(arr):
-    # XXX
+def one_hot_encode(arr: np.ndarray) -> np.ndarray:
     if arr.max() == 1:
         return arr.reshape(-1, 1)
 
@@ -196,7 +256,7 @@ def _one_hot_encode(arr):
 class Split(NamedTuple):
     criterion: float
     feature_idx: int
-    split_value: float
+    split_value: split_value
     left_index: np.ndarray
     right_index: np.ndarray
     left_value: np.ndarray
@@ -207,10 +267,10 @@ def _best_numerical_split(
     x: np.ndarray,
     y: np.ndarray,
     feat_idx: int,
-    min_score: float,
     criterion: Criterion,
     sample_weights: np.ndarray,
 ) -> tuple[float, Split | None]:
+    min_score = np.inf
     best_split = None
     sort_idx = np.argsort(x)
     x_sorted = x[sort_idx]
@@ -242,42 +302,60 @@ def _best_categorical_split(
     x: np.ndarray,
     y: np.ndarray,
     feat_idx: int,
-    min_score: float,
     criterion: Criterion,
     sample_weights: np.ndarray,
 ):
+    min_score = np.inf
     best_split = None
     unique_values = np.unique(x)
-    for value in unique_values:
-        left_index = x == value
-        right_index = ~left_index
 
-        if np.sum(left_index) == 0 or np.sum(right_index) == 0:
+    stats = criterion.init_split_stats(y.astype(np.float64), sample_weights)
+
+    # Pre-compute category indices
+    cat_indices = {}
+    sort_idx = np.argsort(x)
+    x_sorted = x[sort_idx]
+    y_sorted = y[sort_idx]
+    weights_sorted = sample_weights[sort_idx]
+
+    start_idx = 0
+    for i in range(1, len(x_sorted) + 1):
+        if i == len(x_sorted) or x_sorted[i] != x_sorted[start_idx]:
+            cat_indices[x_sorted[start_idx]] = {
+                "indices": sort_idx[start_idx:i],
+                "y": y_sorted[start_idx:i],
+                "weights": weights_sorted[start_idx:i],
+            }
+            start_idx = i
+
+    # Try each category as the left group
+    for value in unique_values:
+        cat_data = cat_indices[value]
+        if len(cat_data["indices"]) == 0 or len(cat_data["indices"]) == len(x):
             continue
 
-        y_left = y[left_index]
-        y_right = y[right_index]
-        weights_left = sample_weights[left_index]
-        weights_right = sample_weights[right_index]
+        # XXX Reset stats to initial state
+        stats = criterion.init_split_stats(y, sample_weights)
 
-        # TODO improve
-        criterion_l = criterion.node_impurity(y_left, weights_left)
-        criterion_r = criterion.node_impurity(y_right, weights_right)
-        score = np.sum(weights_left) * criterion_l + np.sum(
-            weights_right
-        ) * criterion_r / (np.sum(weights_left) + np.sum(weights_right))
+        criterion.update_stats_from_categorical_group(
+            stats, cat_data["y"], cat_data["weights"], is_left=True
+        )
+
+        score = criterion.split_impurity(stats)
+
         if score < min_score:
             min_score = score
+            left_indices = cat_data["indices"]
+            right_indices = np.setdiff1d(np.arange(len(x)), left_indices)
             best_split = Split(
-                criterion=min_score,
+                criterion=score,
                 feature_idx=feat_idx,
-                split_value=value,
-                left_index=np.where(left_index)[0],
-                right_index=np.where(right_index)[0],
-                left_value=criterion.node_optimal_value(y_left),
-                right_value=criterion.node_optimal_value(y_right),
+                split_value=set([value]),
+                left_index=left_indices,
+                right_index=right_indices,
+                left_value=criterion.node_optimal_value(y[left_indices]),
+                right_value=criterion.node_optimal_value(y[right_indices]),
             )
-            print(best_split)
 
     return min_score, best_split
 
@@ -286,38 +364,60 @@ def _best_categorical_optimal_partitioning(
     x: np.ndarray,
     y: np.ndarray,
     feat_idx: int,
-    min_score: float,
     criterion: Criterion,
     sample_weights: np.ndarray,
 ):
+    """Find optimal binary split for categorical feature using Fisher's method.
+
+    For binary classification, this orders categories by their positive response rate
+    and finds the optimal split point that maximizes the difference between groups.
+    """
+    min_score = np.inf
     best_split = None
-    # XXX sample_weights
-    groups = (
-        pd.DataFrame({"x": x, "y": y.ravel(), "w": sample_weights})
-        .groupby("x")
-        .agg({"y": "mean", "w": "sum"})
-        .sort_values(by="y")
+
+    df = pd.DataFrame({"x": x, "y": y.ravel(), "w": sample_weights})
+
+    cat_stats = df.groupby("x").agg(
+        {
+            "y": lambda x: np.average(x, weights=df.loc[x.index, "w"]),
+            "w": "sum",
+        }
     )
+
+    if len(cat_stats) <= 1:
+        return min_score, None
+
+    cat_stats = cat_stats.sort_values("y")
+
     stats = criterion.init_split_stats(y.astype(np.float64), sample_weights)
 
-    for i in range(len(groups) - 1):
-        criterion.update_split_stats(stats, groups["y"].iloc[i], groups["w"].iloc[i])
+    cat_to_order = {cat: i for i, cat in enumerate(cat_stats.index)}
+    x_ordered = np.vectorize(cat_to_order.get)(x)
+
+    for i in range(1, len(cat_stats)):
+        left_cats = cat_stats.index[:i]
+        left_mask = x_ordered < i
+
+        if not (np.any(left_mask) and np.any(~left_mask)):
+            continue
+
+        for idx in range(i):
+            cat_y = cat_stats.iloc[idx]["y"]
+            cat_w = cat_stats.iloc[idx]["w"]
+            criterion.update_split_stats(stats, np.array([cat_y]), cat_w)
+
         score = criterion.split_impurity(stats)
+
         if score < min_score:
             min_score = score
-            # XXX optimize
             best_split = Split(
-                criterion=min_score,
+                criterion=score,
                 feature_idx=feat_idx,
-                split_value=groups.index.values[: i + 1],
-                left_index=np.where(np.isin(x, groups.index[: i + 1]))[0],
-                right_index=np.where(np.isin(x, groups.index[i + 1 :]))[0],
-                left_value=criterion.node_optimal_value(
-                    y[np.isin(x, groups.index[: i + 1])]
-                ),
-                right_value=criterion.node_optimal_value(
-                    y[np.isin(x, groups.index[i + 1 :])]
-                ),
+                split_value=set(left_cats),
+                left_index=np.flatnonzero(left_mask),
+                right_index=np.flatnonzero(~left_mask),
+                left_value=criterion.node_optimal_value(y[left_mask]),
+                right_value=criterion.node_optimal_value(y[~left_mask]),
             )
 
     return min_score, best_split
@@ -333,24 +433,29 @@ def _find_best_split(
         _best_categorical_optimal_partitioning
         if y.shape[1] == 1
         else _best_categorical_split
-        # _best_categorical_split
     )
+
+    feature_types = np.array(
+        [np.issubdtype(X.iloc[:, i].dtype, np.number) for i in range(X.shape[1])]
+    )
+    feature_values = [X.iloc[:, i].values for i in range(X.shape[1])]
 
     for feat_idx in range(X.shape[1]):
         splitter = (
-            _best_numerical_split
-            if np.issubdtype(X.iloc[:, feat_idx].dtype, np.number)
-            else categorical_splitter
+            _best_numerical_split if feature_types[feat_idx] else categorical_splitter
         )
-        min_score, split = splitter(
-            X.iloc[:, feat_idx].values,
+
+        score, split = splitter(
+            feature_values[feat_idx],
             y,
             feat_idx,
-            min_score,
             criterion,
             sample_weights,
         )
-        best_split = split or best_split
+
+        if split is not None and score < min_score:
+            min_score = score
+            best_split = split
 
     return best_split
 
@@ -498,7 +603,7 @@ class DecisionTreeClassifier:
         if sample_weights is None:
             sample_weights = np.ones(X.shape[0], dtype=int)
 
-        y_oh = _one_hot_encode(y)
+        y_oh = one_hot_encode(y)
         node = LeafNode(np.mean(y_oh, axis=0))
         trained_node = split_node(
             node=node,
@@ -522,19 +627,17 @@ class DecisionTreeClassifier:
         if self._root_node is None:
             raise ValueError("model must be trained before prediction")
 
-        y_pred = []
-        for _, x in X.iterrows():
-            node = self._root_node
-
+        def traverse_tree(x, node):
             while isinstance(node, Node):
-                if x.iloc[node.feature_idx] <= node.split_value:
-                    node = node.left
+                feature_val = x.iloc[node.feature_idx]
+                if isinstance(node.split_value, set):
+                    node = node.left if feature_val in node.split_value else node.right
                 else:
-                    node = node.right
+                    node = node.left if feature_val <= node.split_value else node.right
+            return node.value
 
-            y_pred.append(node.value)
-
-        return np.array(y_pred)
+        y_pred = np.array([traverse_tree(x, self._root_node) for _, x in X.iterrows()])
+        return y_pred
 
     def print_tree(self) -> None:
         if self._root_node is None:
@@ -587,16 +690,14 @@ class DecisionTreeRegressor:
         if self._root_node is None:
             raise ValueError("model must be trained before prediction")
 
-        y_pred = []
-        for x in X:
-            node = self._root_node
-
+        def traverse_tree(x, node):
             while isinstance(node, Node):
-                if x[node.feature_idx] <= node.split_value:
-                    node = node.left
+                feature_val = x.iloc[node.feature_idx]
+                if isinstance(node.split_value, set):
+                    node = node.left if feature_val in node.split_value else node.right
                 else:
-                    node = node.right
+                    node = node.left if feature_val <= node.split_value else node.right
+            return node.value
 
-            y_pred.append(node.value)
-
-        return np.array(y_pred)
+        y_pred = np.array([traverse_tree(x, self._root_node) for _, x in X.iterrows()])
+        return y_pred

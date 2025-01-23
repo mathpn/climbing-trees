@@ -13,7 +13,6 @@ from src.cart import (
     DecisionTreeRegressor,
     DecisionTreeClassifier,
 )
-from spoiler import *
 
 
 def main():

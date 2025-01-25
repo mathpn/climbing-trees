@@ -245,11 +245,28 @@ def _class_probabilities(labels, sample_weights=None):
 
 
 def one_hot_encode(arr: np.ndarray) -> np.ndarray:
+    """Convert integer array to one-hot encoded matrix.
+
+    For binary labels (max value 1), returns column vector.
+    For multiclass labels, returns one-hot encoded matrix.
+    """
+    if arr.ndim != 1:
+        raise ValueError("Input array must be 1-dimensional")
+
+    if not np.issubdtype(arr.dtype, np.integer):
+        raise ValueError("Input array must contain integers")
+
+    if arr.min() < 0:
+        raise ValueError("Input array cannot contain negative values")
+
     if arr.max() == 1:
         return arr.reshape(-1, 1)
 
-    one_hot = np.zeros((arr.size, arr.max() + 1), dtype=np.uint8)
-    one_hot[np.arange(arr.size), arr] = 1
+    unique_classes = np.unique(arr)
+    n_classes = len(unique_classes)
+    one_hot = np.zeros((len(arr), n_classes), dtype=np.uint8)
+    for i, label in enumerate(unique_classes):
+        one_hot[arr == label, i] = 1
     return one_hot
 
 

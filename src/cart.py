@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Generic, NamedTuple, Protocol, TypeVar
 
 import numpy as np
@@ -62,12 +62,12 @@ class Criterion(Protocol, Generic[S]):
 
     def split_impurity(self, stats: S) -> float: ...
 
-    def update_stats_from_categorical_group(
+    def make_stats_from_categorical_group(
         self, stats: S, y: np.ndarray, sample_weights: np.ndarray, is_left: bool
-    ) -> None: ...
+    ) -> S: ...
 
 
-class ClassificationCriterion:
+class ClassificationCriterion(Criterion):
     """Criterion for classification trees."""
 
     def __init__(self, objective_fn: Callable[[np.ndarray], float]):
@@ -115,27 +115,34 @@ class ClassificationCriterion:
         p_r = stats.right_weight / total_weight
         return float(p_l * criterion_l + p_r * criterion_r)
 
-    def update_stats_from_categorical_group(
+    def make_stats_from_categorical_group(
         self,
         stats: ClassificationSplitStats,
         y: np.ndarray,
         sample_weights: np.ndarray,
         is_left: bool,
-    ) -> None:
+    ) -> ClassificationSplitStats:
         group_weights = sample_weights.reshape(-1, 1)
         group_sum = np.sum(y * group_weights, axis=0)
         group_weight = np.sum(sample_weights)
 
         if is_left:
-            stats.left_weight = group_weight
-            stats.right_weight = stats.right_weight - group_weight
-            stats.left_class_count = group_sum
-            stats.right_class_count -= group_sum
+            stats = replace(
+                stats,
+                left_weight=group_weight,
+                right_weight=stats.right_weight - group_weight,
+                left_class_count=group_sum,
+                right_class_count=stats.right_class_count - group_sum,
+            )
         else:
-            stats.right_weight = group_weight
-            stats.left_weight = stats.left_weight - group_weight
-            stats.right_class_count = group_sum
-            stats.left_class_count -= group_sum
+            stats = replace(
+                stats,
+                left_weight=stats.left_weight - group_weight,
+                right_weight=group_weight,
+                left_class_count=stats.left_class_count - group_sum,
+                right_class_count=group_sum,
+            )
+        return stats
 
 
 class SquaredLossCriterion(Criterion):
@@ -199,32 +206,38 @@ class SquaredLossCriterion(Criterion):
         p_r = stats.right_weight / total_weight
         return float(p_l * criterion_l + p_r * criterion_r)
 
-    def update_stats_from_categorical_group(
+    def make_stats_from_categorical_group(
         self,
         stats: SquaredLossSplitStats,
         y: np.ndarray,
         sample_weights: np.ndarray,
         is_left: bool,
-    ) -> None:
+    ) -> SquaredLossSplitStats:
         group_weights = sample_weights.reshape(-1, 1)
         group_sum = np.sum(y * group_weights, axis=0)
         group_sum_squared = np.sum(y * y * group_weights, axis=0)
         group_weight = np.sum(sample_weights)
 
         if is_left:
-            stats.left_weight = group_weight
-            stats.right_weight = stats.right_weight - group_weight
-            stats.left_sum = group_sum
-            stats.right_sum -= group_sum
-            stats.left_sum_squared = group_sum_squared
-            stats.right_sum_squared -= group_sum_squared
+            stats = replace(
+                stats,
+                left_weight=group_weight,
+                right_weight=stats.right_weight - group_weight,
+                left_sum=group_sum,
+                right_sum=stats.right_sum - group_sum,
+                left_sum_squared=group_sum_squared,
+                right_sum_squared=stats.right_sum_squared - group_sum_squared,
+            )
         else:
-            stats.right_weight = group_weight
-            stats.left_weight = stats.left_weight - group_weight
-            stats.right_sum = group_sum
-            stats.left_sum -= group_sum
-            stats.right_sum_squared = group_sum_squared
-            stats.left_sum_squared -= group_sum_squared
+            stats = replace(
+                stats,
+                left_weight=stats.left_weight - group_weight,
+                right_weight=group_weight,
+                left_sum=stats.left_sum - group_sum,
+                right_sum=group_sum,
+                left_sum_squared=stats.left_sum_squared - group_sum_squared,
+            )
+        return stats
 
 
 def entropy(prob):
@@ -345,20 +358,17 @@ def _best_categorical_split(
             }
             start_idx = i
 
-    # Try each category as the left group
+    stats = criterion.init_split_stats(y, sample_weights)
+
     for value in unique_values:
         cat_data = cat_indices[value]
         if len(cat_data["indices"]) == 0 or len(cat_data["indices"]) == len(x):
             continue
 
-        # XXX Reset stats to initial state
-        stats = criterion.init_split_stats(y, sample_weights)
-
-        criterion.update_stats_from_categorical_group(
+        group_stats = criterion.make_stats_from_categorical_group(
             stats, cat_data["y"], cat_data["weights"], is_left=True
         )
-
-        score = criterion.split_impurity(stats)
+        score = criterion.split_impurity(group_stats)
 
         if score < min_score:
             min_score = score

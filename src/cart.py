@@ -542,7 +542,7 @@ def split_node(
         return LeafNode(value)
 
     prior_criterion = criterion.node_impurity(y, sample_weights)
-    if prior_criterion == 0:
+    if np.isclose(prior_criterion, 0):
         return LeafNode(value)
 
     split = _find_best_split(X, y, criterion, sample_weights, min_samples_leaf)

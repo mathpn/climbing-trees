@@ -312,6 +312,7 @@ def _best_numerical_split(
     feat_idx: int,
     criterion: Criterion,
     sample_weights: np.ndarray,
+    min_samples_leaf: int,
 ) -> tuple[float, Split | None]:
     min_score = np.inf
     best_split = None
@@ -322,7 +323,11 @@ def _best_numerical_split(
 
     stats = criterion.init_split_stats(y_sorted, weights_sorted)
 
-    for i in range(1, len(y_sorted)):
+    n_samples = len(y_sorted)
+    for i in range(1, n_samples):
+        if i < min_samples_leaf or (n_samples - i) < min_samples_leaf:
+            continue
+
         criterion.update_split_stats(stats, y_sorted[i - 1], weights_sorted[i - 1])
         if x_sorted[i] != x_sorted[i - 1]:
             score = criterion.split_impurity(stats)
@@ -347,6 +352,7 @@ def _best_categorical_split(
     feat_idx: int,
     criterion: Criterion,
     sample_weights: np.ndarray,
+    min_samples_leaf: int,
 ):
     min_score = np.inf
     best_split = None
@@ -373,9 +379,14 @@ def _best_categorical_split(
 
     stats = criterion.init_split_stats(y, sample_weights)
 
+    n_samples = len(y_sorted)
     for value in unique_values:
         cat_data = cat_indices[value]
-        if len(cat_data["indices"]) == 0 or len(cat_data["indices"]) == len(x):
+        group_size = len(cat_data["indices"])
+        if group_size == 0 or group_size == len(x):
+            continue
+
+        if group_size < min_samples_leaf or (n_samples - group_size) < min_samples_leaf:
             continue
 
         group_stats = criterion.make_stats_from_categorical_group(
@@ -406,6 +417,7 @@ def _best_categorical_optimal_partitioning(
     feat_idx: int,
     criterion: Criterion,
     sample_weights: np.ndarray,
+    min_samples_leaf: int,
 ):
     """Find optimal binary split for categorical feature using Fisher's method.
 
@@ -418,16 +430,17 @@ def _best_categorical_optimal_partitioning(
     df = pd.DataFrame({"x": x, "y": y.ravel(), "w": sample_weights})
 
     cat_stats = df.groupby("x").agg(
-        {
-            "y": lambda x: np.average(x, weights=df.loc[x.index, "w"]),
-            "w": "sum",
-        }
+        y_avg=pd.NamedAgg(
+            column="y", aggfunc=lambda x: np.average(x, weights=df.loc[x.index, "w"])
+        ),
+        y_count=pd.NamedAgg(column="y", aggfunc=len),
+        w=pd.NamedAgg(column="w", aggfunc="sum"),
     )
 
     if len(cat_stats) <= 1:
         return min_score, None
 
-    cat_stats = cat_stats.sort_values("y")
+    cat_stats = cat_stats.sort_values("y_avg")
 
     stats = criterion.init_split_stats(
         y.astype(np.float64), sample_weights.astype(np.float64)
@@ -436,6 +449,7 @@ def _best_categorical_optimal_partitioning(
     cat_to_order = {cat: i for i, cat in enumerate(cat_stats.index)}
     x_ordered = np.vectorize(cat_to_order.get)(x)
 
+    n_samples = len(y)
     for i in range(1, len(cat_stats)):
         left_cats = cat_stats.index[:i]
         left_mask = x_ordered < i
@@ -443,10 +457,13 @@ def _best_categorical_optimal_partitioning(
         if not (np.any(left_mask) and np.any(~left_mask)):
             continue
 
-        for idx in range(i):
-            cat_y = cat_stats.iloc[idx]["y"]
-            cat_w = cat_stats.iloc[idx]["w"]
-            criterion.update_split_stats(stats, np.array([cat_y]), cat_w)
+        group_size = cat_stats.iloc[i - 1]["y_count"]
+        if group_size < min_samples_leaf or (n_samples - group_size) < min_samples_leaf:
+            continue
+
+        cat_y = cat_stats.iloc[i - 1]["y_avg"]
+        cat_w = cat_stats.iloc[i - 1]["w"]
+        criterion.update_split_stats(stats, np.array([cat_y]), cat_w)
 
         score = criterion.split_impurity(stats)
 
@@ -466,7 +483,11 @@ def _best_categorical_optimal_partitioning(
 
 
 def _find_best_split(
-    X: pd.DataFrame, y: np.ndarray, criterion: Criterion, sample_weights: np.ndarray
+    X: pd.DataFrame,
+    y: np.ndarray,
+    criterion: Criterion,
+    sample_weights: np.ndarray,
+    min_samples_leaf: int,
 ) -> Split | None:
     min_score = np.inf
     best_split = None
@@ -493,6 +514,7 @@ def _find_best_split(
             feat_idx,
             criterion,
             sample_weights,
+            min_samples_leaf,
         )
 
         if split is not None and score < min_score:
@@ -502,7 +524,6 @@ def _find_best_split(
     return best_split
 
 
-# FIXME min_samples_leaf must be past of split search?
 def split_node(
     node,
     X,
@@ -518,11 +539,14 @@ def split_node(
     if X.shape[0] <= 1 or (max_depth and depth >= max_depth):
         return LeafNode(value)
 
+    if X.shape[0] < 2 * min_samples_leaf:
+        return LeafNode(value)
+
     prior_criterion = criterion.node_impurity(y, sample_weights)
     if prior_criterion == 0:
         return LeafNode(value)
 
-    split = _find_best_split(X, y, criterion, sample_weights)
+    split = _find_best_split(X, y, criterion, sample_weights, min_samples_leaf)
     if split is None:
         return None
 

@@ -84,6 +84,11 @@ class ClassificationCriterion(Criterion):
         self, y: np.ndarray, sample_weights: np.ndarray
     ) -> ClassificationSplitStats:
         sample_weights = sample_weights.reshape((-1, 1))
+
+        # For binary classification with single column
+        if y.shape[1] == 1:
+            y = np.hstack((y, 1 - y))
+
         return ClassificationSplitStats(
             left_weight=0,
             right_weight=np.sum(sample_weights),
@@ -101,6 +106,11 @@ class ClassificationCriterion(Criterion):
     ) -> None:
         stats.left_weight += weight
         stats.right_weight -= weight
+
+        # For binary classification with single column
+        if len(y_value) == 1:
+            y_value = np.hstack((y_value, 1 - y_value))
+
         stats.left_class_count += y_value * weight
         stats.right_class_count -= y_value * weight
 
@@ -121,8 +131,13 @@ class ClassificationCriterion(Criterion):
         is_left: bool,
     ) -> ClassificationSplitStats:
         group_weights = sample_weights.reshape(-1, 1)
-        group_sum = np.sum(y * group_weights, axis=0)
         group_weight = np.sum(sample_weights)
+
+        # For binary classification with single column
+        if y.shape[1] == 1:
+            y = np.hstack((y, 1 - y))
+
+        group_sum = np.sum(y * group_weights, axis=0)
 
         if is_left:
             stats = replace(

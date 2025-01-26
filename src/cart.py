@@ -591,17 +591,21 @@ def count_nodes(node: Node | LeafNode):
 
 
 class Regressor(Protocol):
-    def fit(self, X, y, sample_weights=None) -> None: ...
+    def fit(
+        self, X: pd.DataFrame, y: np.ndarray, sample_weights: np.ndarray | None = None
+    ) -> None: ...
 
-    def predict(self, X) -> np.ndarray: ...
+    def predict(self, X: pd.DataFrame) -> np.ndarray: ...
 
 
 class Classifier(Protocol):
-    def fit(self, X, y, sample_weights=None) -> None: ...
+    def fit(
+        self, X: pd.DataFrame, y: np.ndarray, sample_weights: np.ndarray | None = None
+    ) -> None: ...
 
-    def predict(self, X) -> np.ndarray: ...
+    def predict(self, X: pd.DataFrame) -> np.ndarray: ...
 
-    def predict_proba(self, X) -> np.ndarray: ...
+    def predict_proba(self, X: pd.DataFrame) -> np.ndarray: ...
 
 
 class DecisionTreeClassifier:
@@ -616,7 +620,9 @@ class DecisionTreeClassifier:
         self.min_criterion_reduction = min_criterion_reduction
         self._root_node: Node | LeafNode | None = None
 
-    def fit(self, X, y, sample_weights: np.ndarray | None = None) -> None:
+    def fit(
+        self, X: pd.DataFrame, y: np.ndarray, sample_weights: np.ndarray | None = None
+    ) -> None:
         if sample_weights is None:
             sample_weights = np.ones(X.shape[0], dtype=int)
 
@@ -637,10 +643,10 @@ class DecisionTreeClassifier:
         node = trained_node if trained_node is not None else node
         self._root_node = node
 
-    def predict(self, X) -> np.ndarray:
+    def predict(self, X: pd.DataFrame) -> np.ndarray:
         return _prob_to_class(self.predict_proba(X))
 
-    def predict_proba(self, X) -> np.ndarray:
+    def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
         if self._root_node is None:
             raise ValueError("model must be trained before prediction")
 
@@ -680,7 +686,9 @@ class DecisionTreeRegressor:
         self.min_criterion_reduction = min_criterion_reduction
         self._root_node: Node | LeafNode | None = None
 
-    def fit(self, X, y, sample_weights=None) -> None:
+    def fit(
+        self, X: pd.DataFrame, y: np.ndarray, sample_weights: np.ndarray | None = None
+    ) -> None:
         if sample_weights is None:
             sample_weights = np.ones(X.shape[0], dtype=int)
 
@@ -703,7 +711,7 @@ class DecisionTreeRegressor:
         node = trained_node if trained_node is not None else node
         self._root_node = node
 
-    def predict(self, X) -> np.ndarray:
+    def predict(self, X: pd.DataFrame) -> np.ndarray:
         if self._root_node is None:
             raise ValueError("model must be trained before prediction")
 

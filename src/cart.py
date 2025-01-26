@@ -60,7 +60,7 @@ class Criterion(Protocol, Generic[S]):
 
     def split_impurity(self, stats: S) -> float: ...
 
-    def make_stats_from_categorical_group(
+    def make_stats_from_categorical_level(
         self, stats: S, y: np.ndarray, sample_weights: np.ndarray, is_left: bool
     ) -> S: ...
 
@@ -123,37 +123,37 @@ class ClassificationCriterion(Criterion):
         p_r = stats.right_weight / total_weight
         return float(p_l * criterion_l + p_r * criterion_r)
 
-    def make_stats_from_categorical_group(
+    def make_stats_from_categorical_level(
         self,
         stats: ClassificationSplitStats,
         y: np.ndarray,
         sample_weights: np.ndarray,
         is_left: bool,
     ) -> ClassificationSplitStats:
-        group_weights = sample_weights.reshape(-1, 1)
-        group_weight = np.sum(sample_weights)
+        level_weights = sample_weights.reshape(-1, 1)
+        level_weight = np.sum(sample_weights)
 
         # For binary classification with single column
         if y.shape[1] == 1:
             y = np.hstack((y, 1 - y))
 
-        group_sum = np.sum(y * group_weights, axis=0)
+        level_sum = np.sum(y * level_weights, axis=0)
 
         if is_left:
             stats = replace(
                 stats,
-                left_weight=group_weight,
-                right_weight=stats.right_weight - group_weight,
-                left_class_count=group_sum,
-                right_class_count=stats.right_class_count - group_sum,
+                left_weight=level_weight,
+                right_weight=stats.right_weight - level_weight,
+                left_class_count=level_sum,
+                right_class_count=stats.right_class_count - level_sum,
             )
         else:
             stats = replace(
                 stats,
-                left_weight=stats.left_weight - group_weight,
-                right_weight=group_weight,
-                left_class_count=stats.left_class_count - group_sum,
-                right_class_count=group_sum,
+                left_weight=stats.left_weight - level_weight,
+                right_weight=level_weight,
+                left_class_count=stats.left_class_count - level_sum,
+                right_class_count=level_sum,
             )
         return stats
 
@@ -219,36 +219,36 @@ class SquaredLossCriterion(Criterion):
         p_r = stats.right_weight / total_weight
         return float(p_l * criterion_l + p_r * criterion_r)
 
-    def make_stats_from_categorical_group(
+    def make_stats_from_categorical_level(
         self,
         stats: SquaredLossSplitStats,
         y: np.ndarray,
         sample_weights: np.ndarray,
         is_left: bool,
     ) -> SquaredLossSplitStats:
-        group_weights = sample_weights.reshape(-1, 1)
-        group_sum = np.sum(y * group_weights, axis=0)
-        group_sum_squared = np.sum(y * y * group_weights, axis=0)
-        group_weight = np.sum(sample_weights)
+        level_weights = sample_weights.reshape(-1, 1)
+        level_sum = np.sum(y * level_weights, axis=0)
+        level_sum_squared = np.sum(y * y * level_weights, axis=0)
+        level_weight = np.sum(sample_weights)
 
         if is_left:
             stats = replace(
                 stats,
-                left_weight=group_weight,
-                right_weight=stats.right_weight - group_weight,
-                left_sum=group_sum,
-                right_sum=stats.right_sum - group_sum,
-                left_sum_squared=group_sum_squared,
-                right_sum_squared=stats.right_sum_squared - group_sum_squared,
+                left_weight=level_weight,
+                right_weight=stats.right_weight - level_weight,
+                left_sum=level_sum,
+                right_sum=stats.right_sum - level_sum,
+                left_sum_squared=level_sum_squared,
+                right_sum_squared=stats.right_sum_squared - level_sum_squared,
             )
         else:
             stats = replace(
                 stats,
-                left_weight=stats.left_weight - group_weight,
-                right_weight=group_weight,
-                left_sum=stats.left_sum - group_sum,
-                right_sum=group_sum,
-                left_sum_squared=stats.left_sum_squared - group_sum_squared,
+                left_weight=stats.left_weight - level_weight,
+                right_weight=level_weight,
+                left_sum=stats.left_sum - level_sum,
+                right_sum=level_sum,
+                left_sum_squared=stats.left_sum_squared - level_sum_squared,
             )
         return stats
 
@@ -382,17 +382,17 @@ def _best_categorical_split(
     n_samples = len(y_sorted)
     for value in unique_values:
         cat_data = cat_indices[value]
-        group_size = len(cat_data["indices"])
-        if group_size == 0 or group_size == len(x):
+        level_size = len(cat_data["indices"])
+        if level_size == 0 or level_size == len(x):
             continue
 
-        if group_size < min_samples_leaf or (n_samples - group_size) < min_samples_leaf:
+        if level_size < min_samples_leaf or (n_samples - level_size) < min_samples_leaf:
             continue
 
-        group_stats = criterion.make_stats_from_categorical_group(
+        level_stats = criterion.make_stats_from_categorical_level(
             stats, cat_data["y"], cat_data["weights"], is_left=True
         )
-        score = criterion.split_impurity(group_stats)
+        score = criterion.split_impurity(level_stats)
 
         if score < min_score:
             min_score = score
@@ -457,13 +457,13 @@ def _best_categorical_optimal_partitioning(
         if not (np.any(left_mask) and np.any(~left_mask)):
             continue
 
-        group_size = cat_stats.iloc[i - 1]["y_count"]
-        if group_size < min_samples_leaf or (n_samples - group_size) < min_samples_leaf:
+        level_size = cat_stats.iloc[i - 1]["y_count"]
+        if level_size < min_samples_leaf or (n_samples - level_size) < min_samples_leaf:
             continue
 
-        cat_y = cat_stats.iloc[i - 1]["y_avg"]
-        cat_w = cat_stats.iloc[i - 1]["w"]
-        criterion.update_split_stats(stats, np.array([cat_y]), cat_w)
+        cat_y = cat_stats.iloc[i - 1 : i]["y_avg"].values
+        cat_w = cat_stats.iloc[i - 1 : i]["w"].values
+        criterion.update_split_stats(stats, cat_y, cat_w)
 
         score = criterion.split_impurity(stats)
 

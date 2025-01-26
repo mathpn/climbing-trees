@@ -662,17 +662,6 @@ class DecisionTreeClassifier:
         y_pred = np.array([traverse_tree(x, self._root_node) for _, x in X.iterrows()])
         return y_pred
 
-    def print_tree(self) -> None:
-        if self._root_node is None:
-            print("model is not trained")
-            return
-        print_tree(self._root_node)
-
-    def node_count(self) -> int:
-        if self._root_node is None:
-            return 0
-        return count_nodes(self._root_node)
-
 
 class DecisionTreeRegressor:
     def __init__(

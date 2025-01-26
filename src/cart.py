@@ -13,7 +13,7 @@ class LeafNode:
     value: np.ndarray
 
 
-type split_value = float | set
+split_value = float | set
 
 
 @dataclass
@@ -525,11 +525,11 @@ def _find_best_split(
 
 
 def split_node(
-    node,
-    X,
-    y,
-    value,
-    depth,
+    node: Node | LeafNode,
+    X: pd.DataFrame,
+    y: np.ndarray,
+    value: np.ndarray,
+    depth: int,
     criterion: Criterion,
     sample_weights: np.ndarray,
     max_depth: int = 0,

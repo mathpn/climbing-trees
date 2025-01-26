@@ -75,7 +75,6 @@ class ClassificationCriterion(Criterion):
         return np.mean(y, axis=0)
 
     def node_impurity(self, y: np.ndarray, sample_weights: np.ndarray) -> float:
-        # XXX explain
         if y.shape[1] == 1:
             y = np.hstack((y, 1 - y))
         return self.objective(_class_probabilities(y, sample_weights))
@@ -551,7 +550,6 @@ def split_node(
         return None
 
     criterion_reduction = prior_criterion - split.criterion
-    # XXX fix in text min_
     if min_criterion_reduction and criterion_reduction < min_criterion_reduction:
         return None
 

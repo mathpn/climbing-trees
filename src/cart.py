@@ -558,11 +558,6 @@ def split_node(
     y_left = y[split.left_index]
     y_right = y[split.right_index]
 
-    if min_samples_leaf and (
-        X_left.shape[0] < min_samples_leaf or X_right.shape[0] < min_samples_leaf
-    ):
-        return None
-
     node = Node(
         split.feature_idx,
         split.split_value,

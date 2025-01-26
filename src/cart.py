@@ -7,8 +7,6 @@ from typing import Generic, NamedTuple, Protocol, TypeVar
 
 import numpy as np
 
-EPS = 1e-6
-
 
 @dataclass
 class LeafNode:

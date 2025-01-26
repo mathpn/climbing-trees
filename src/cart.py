@@ -416,7 +416,9 @@ def _best_categorical_optimal_partitioning(
 
     cat_stats = cat_stats.sort_values("y")
 
-    stats = criterion.init_split_stats(y.astype(np.float64), sample_weights)
+    stats = criterion.init_split_stats(
+        y.astype(np.float64), sample_weights.astype(np.float64)
+    )
 
     cat_to_order = {cat: i for i, cat in enumerate(cat_stats.index)}
     x_ordered = np.vectorize(cat_to_order.get)(x)

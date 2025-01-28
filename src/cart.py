@@ -598,7 +598,11 @@ def split_node(
     return node
 
 
-def print_tree(node: Node | LeafNode, depth: int = 0):
+def print_tree(node: Node | LeafNode | None, depth: int = 0):
+    if node is None:
+        print("tree is not trained")
+        return
+
     indent = "  " * depth
     if isinstance(node, LeafNode):
         print(f"{indent}LeafNode(value={np.array_str(node.value, precision=2)})")

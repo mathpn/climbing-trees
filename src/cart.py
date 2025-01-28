@@ -724,6 +724,7 @@ class DecisionTreeRegressor:
     def fit(
         self, X: pd.DataFrame, y: np.ndarray, sample_weights: np.ndarray | None = None
     ) -> None:
+        y = y.astype(np.float64)
         if sample_weights is None:
             sample_weights = np.ones(X.shape[0], dtype=int)
 

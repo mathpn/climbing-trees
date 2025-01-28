@@ -178,7 +178,7 @@ class SquaredLossCriterion(Criterion):
             left_sum=np.zeros(y.shape[1], dtype=y.dtype),
             right_sum=np.sum(y * sample_weights, axis=0),
             left_sum_squared=np.zeros(y.shape[1], dtype=y.dtype),
-            right_sum_squared=np.sum(y * y, axis=0),
+            right_sum_squared=np.sum(y * y * sample_weights, axis=0),
         )
 
     def update_split_stats(

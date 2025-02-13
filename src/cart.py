@@ -487,6 +487,7 @@ def _find_best_split(
     criterion: Criterion,
     sample_weights: np.ndarray,
     min_samples_leaf: int,
+    feature_indices: np.ndarray,
 ) -> Split | None:
     min_score = np.inf
     best_split = None
@@ -502,7 +503,7 @@ def _find_best_split(
     )
     feature_values = [X.iloc[:, i].values for i in range(X.shape[1])]
 
-    for feat_idx in range(X.shape[1]):
+    for feat_idx in feature_indices:
         splitter = (
             _best_numerical_split if feature_types[feat_idx] else categorical_splitter
         )
@@ -523,79 +524,102 @@ def _find_best_split(
     return best_split
 
 
-def split_node(
-    node: Node | LeafNode,
-    X: pd.DataFrame,
-    y: np.ndarray,
-    value: np.ndarray,
-    depth: int,
+def _get_feature_indices(
+    n_features: int, max_features: int | float | None = None
+) -> np.ndarray:
+    """Get indices of features to consider for splitting.
+
+    Args:
+        n_features: Total number of features
+        max_features: If int, consider max_features features.
+                     If float, consider max_features * n_features features.
+                     If None, consider all features.
+    """
+    if max_features is None:
+        return np.arange(n_features)
+
+    if isinstance(max_features, float):
+        if not 0.0 < max_features <= 1.0:
+            raise ValueError("max_features must be in (0, 1]")
+        max_features = int(max_features * n_features)
+
+    max_features = min(max_features, n_features)
+    return np.random.choice(n_features, size=max_features, replace=False)
+
+
+def get_splitter(
     criterion: Criterion,
-    sample_weights: np.ndarray,
     max_depth: int = 0,
     min_samples_leaf: int = 0,
     min_criterion_reduction: float = 0,
-) -> LeafNode | Node | None:
-    if X.shape[0] <= 1 or (max_depth and depth >= max_depth):
-        return LeafNode(value)
+    max_features: int | float | None = None,
+):
+    def split_node(
+        node: Node | LeafNode,
+        X: pd.DataFrame,
+        y: np.ndarray,
+        value: np.ndarray,
+        sample_weights: np.ndarray,
+        depth: int,
+    ) -> LeafNode | Node | None:
+        if X.shape[0] <= 1 or (max_depth and depth >= max_depth):
+            return LeafNode(value)
 
-    if X.shape[0] < 2 * min_samples_leaf:
-        return LeafNode(value)
+        if X.shape[0] < 2 * min_samples_leaf:
+            return LeafNode(value)
 
-    prior_criterion = criterion.node_impurity(y, sample_weights)
-    if np.isclose(prior_criterion, 0):
-        return LeafNode(value)
+        prior_criterion = criterion.node_impurity(y, sample_weights)
+        if np.isclose(prior_criterion, 0):
+            return LeafNode(value)
 
-    split = _find_best_split(X, y, criterion, sample_weights, min_samples_leaf)
-    if split is None:
-        return None
+        feature_indices = _get_feature_indices(X.shape[1], max_features)
+        split = _find_best_split(
+            X, y, criterion, sample_weights, min_samples_leaf, feature_indices
+        )
+        if split is None:
+            return None
 
-    criterion_reduction = prior_criterion - split.criterion
-    if min_criterion_reduction and criterion_reduction < min_criterion_reduction:
-        return None
+        criterion_reduction = prior_criterion - split.criterion
+        if min_criterion_reduction and criterion_reduction < min_criterion_reduction:
+            return None
 
-    X_left = X.iloc[split.left_index, :]
-    X_right = X.iloc[split.right_index, :]
-    y_left = y[split.left_index]
-    y_right = y[split.right_index]
+        X_left = X.iloc[split.left_index, :]
+        X_right = X.iloc[split.right_index, :]
+        y_left = y[split.left_index]
+        y_right = y[split.right_index]
 
-    node = Node(
-        split.feature_idx,
-        split.split_value,
-        LeafNode(split.left_value),
-        LeafNode(split.right_value),
-    )
+        node = Node(
+            split.feature_idx,
+            split.split_value,
+            LeafNode(split.left_value),
+            LeafNode(split.right_value),
+        )
 
-    left = split_node(
-        node=node,
-        X=X_left,
-        y=y_left,
-        value=split.left_value,
-        depth=depth + 1,
-        criterion=criterion,
-        sample_weights=sample_weights[split.left_index],
-        max_depth=max_depth,
-        min_samples_leaf=min_samples_leaf,
-        min_criterion_reduction=min_criterion_reduction,
-    )
-    right = split_node(
-        node=node,
-        X=X_right,
-        y=y_right,
-        value=split.right_value,
-        depth=depth + 1,
-        criterion=criterion,
-        sample_weights=sample_weights[split.right_index],
-        max_depth=max_depth,
-        min_samples_leaf=min_samples_leaf,
-        min_criterion_reduction=min_criterion_reduction,
-    )
+        left = split_node(
+            node=node,
+            X=X_left,
+            y=y_left,
+            value=split.left_value,
+            sample_weights=sample_weights[split.left_index],
+            depth=depth + 1,
+        )
+        right = split_node(
+            node=node,
+            X=X_right,
+            y=y_right,
+            value=split.right_value,
+            sample_weights=sample_weights[split.right_index],
+            depth=depth + 1,
+        )
 
-    if left is not None:
-        node.left = left
-    if right is not None:
-        node.right = right
+        if left is not None:
+            node.left = left
+        if right is not None:
+            node.right = right
 
-    return node
+        return node
+
+    return split_node
 
 
 def print_tree(node: Node | LeafNode | None, depth: int = 0):
@@ -657,13 +681,15 @@ class Classifier(Protocol):
 class DecisionTreeClassifier:
     def __init__(
         self,
-        max_depth: int,
+        max_depth: int = 0,
         min_samples_leaf: int = 0,
         min_criterion_reduction: float = 0,
+        max_features: int | float | None = None,
     ) -> None:
         self.max_depth = max_depth
         self.min_samples_leaf = min_samples_leaf
         self.min_criterion_reduction = min_criterion_reduction
+        self.max_features = max_features
         self._root_node: Node | LeafNode | None = None
 
     def fit(
@@ -674,17 +700,20 @@ class DecisionTreeClassifier:
 
         y_oh = one_hot_encode(y)
         node = LeafNode(np.mean(y_oh, axis=0))
-        trained_node = split_node(
+        node_splitter = get_splitter(
+            ClassificationCriterion(gini_impurity),
+            self.max_depth,
+            self.min_samples_leaf,
+            self.min_criterion_reduction,
+            self.max_features,
+        )
+        trained_node = node_splitter(
             node=node,
             X=X,
             y=y_oh,
             value=np.mean(y, axis=0),
-            depth=0,
-            criterion=ClassificationCriterion(gini_impurity),
             sample_weights=sample_weights,
-            max_depth=self.max_depth,
-            min_samples_leaf=self.min_samples_leaf,
-            min_criterion_reduction=self.min_criterion_reduction,
+            depth=0,
         )
         node = trained_node if trained_node is not None else node
         self._root_node = node
@@ -712,13 +741,15 @@ class DecisionTreeClassifier:
 class DecisionTreeRegressor:
     def __init__(
         self,
-        max_depth: int,
+        max_depth: int = 0,
         min_samples_leaf: int = 0,
         min_criterion_reduction: float = 0,
+        max_features: int | float | None = None,
     ) -> None:
         self.max_depth = max_depth
         self.min_samples_leaf = min_samples_leaf
         self.min_criterion_reduction = min_criterion_reduction
+        self.max_features = max_features
         self._root_node: Node | LeafNode | None = None
 
     def fit(
@@ -732,17 +763,20 @@ class DecisionTreeRegressor:
             y = y.reshape((-1, 1))
 
         node = LeafNode(np.mean(y, axis=0))
-        trained_node = split_node(
+        node_splitter = get_splitter(
+            SquaredLossCriterion(),
+            self.max_depth,
+            self.min_samples_leaf,
+            self.min_criterion_reduction,
+            self.max_features,
+        )
+        trained_node = node_splitter(
             node=node,
             X=X,
             y=y,
             value=np.mean(y, axis=0),
-            depth=0,
-            criterion=SquaredLossCriterion(),
             sample_weights=sample_weights,
-            max_depth=self.max_depth,
-            min_samples_leaf=self.min_samples_leaf,
-            min_criterion_reduction=self.min_criterion_reduction,
+            depth=0,
         )
         node = trained_node if trained_node is not None else node
         self._root_node = node

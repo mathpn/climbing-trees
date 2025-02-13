@@ -9,6 +9,7 @@ from sklearn.metrics import accuracy_score, f1_score, mean_squared_error
 from sklearn.model_selection import train_test_split
 
 from src.bagging import BaggingClassifier, BaggingRegressor
+from src.random_forest import RandomForestClassifier, RandomForestRegressor
 from src.cart import DecisionTreeClassifier, DecisionTreeRegressor, print_tree
 
 
@@ -37,7 +38,7 @@ def main():
     print()
 
     tree = BaggingClassifier(
-        lambda: DecisionTreeClassifier(max_depth, min_samples_leaf),
+        lambda: DecisionTreeClassifier(),
         n_estimators=10,
     )
     tree.fit(X_train, y_train, sample_weights=np.ones(len(y)) / 10)
@@ -45,6 +46,14 @@ def main():
     score = f1_score(y_test, pred, average="macro")
     acc = accuracy_score(y_test, pred)
     print(f"bagging tree -> F1: {score:.2f} accuracy: {acc:.2%}")
+    print()
+
+    tree = RandomForestClassifier(n_estimators=10)
+    tree.fit(X_train, y_train)
+    pred = tree.predict(X_test)
+    score = f1_score(y_test, pred, average="macro")
+    acc = accuracy_score(y_test, pred)
+    print(f"random forest -> F1: {score:.2f} accuracy: {acc:.2%}")
     print()
 
     max_depth = 8
@@ -63,13 +72,21 @@ def main():
     print()
 
     tree = BaggingRegressor(
-        lambda: DecisionTreeRegressor(max_depth, min_samples_leaf),
+        lambda: DecisionTreeRegressor(),
         n_estimators=10,
     )
     tree.fit(X_train, y_train)
     pred = tree.predict(X_test)
     mse = mean_squared_error(y_test, pred)
     print(f"bagging tree -> MSE: {mse:.2f}")
+    print()
+
+    tree = RandomForestRegressor(n_estimators=10)
+    tree.fit(X_train, y_train)
+    pred = tree.predict(X_test)
+    mse = mean_squared_error(y_test, pred)
+    print(f"random forest -> MSE: {mse:.2f}")
+    print()
 
 
 if __name__ == "__main__":

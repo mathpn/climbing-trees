@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import pandas as pd
+from abc import ABC
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Generic, NamedTuple, Protocol, TypeVar
 
 import numpy as np
+import pandas as pd
 
 
 @dataclass
@@ -678,7 +679,10 @@ class Classifier(Protocol):
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray: ...
 
 
-class DecisionTreeClassifier:
+T = TypeVar("T", bound=Classifier | Regressor)
+
+
+class BaseDecisionTree(Generic[T], ABC):
     def __init__(
         self,
         max_depth: int = 0,
@@ -692,16 +696,22 @@ class DecisionTreeClassifier:
         self.max_features = max_features
         self._root_node: Node | LeafNode | None = None
 
-    def fit(
-        self, X: pd.DataFrame, y: np.ndarray, sample_weights: np.ndarray | None = None
+    def _fit(
+        self,
+        X: pd.DataFrame,
+        y: np.ndarray,
+        sample_weights: np.ndarray | None,
+        criterion: Criterion,
     ) -> None:
         if sample_weights is None:
             sample_weights = np.ones(X.shape[0], dtype=int)
 
-        y_oh = one_hot_encode(y)
-        node = LeafNode(np.mean(y_oh, axis=0))
+        if y.ndim == 1:
+            y = y.reshape((-1, 1))
+
+        node = LeafNode(np.mean(y, axis=0))
         node_splitter = get_splitter(
-            ClassificationCriterion(gini_impurity),
+            criterion,
             self.max_depth,
             self.min_samples_leaf,
             self.min_criterion_reduction,
@@ -710,7 +720,7 @@ class DecisionTreeClassifier:
         trained_node = node_splitter(
             node=node,
             X=X,
-            y=y_oh,
+            y=y,
             value=np.mean(y, axis=0),
             sample_weights=sample_weights,
             depth=0,
@@ -718,44 +728,42 @@ class DecisionTreeClassifier:
         node = trained_node if trained_node is not None else node
         self._root_node = node
 
+    def _traverse_tree(self, x: pd.Series) -> np.ndarray:
+        node = self._root_node
+        if node is None:
+            raise ValueError("model must be trained before prediction")
+
+        while isinstance(node, Node):
+            feature_val = x.iloc[node.feature_idx]
+            if isinstance(node.split_value, set):
+                node = node.left if feature_val in node.split_value else node.right
+            else:
+                node = node.left if feature_val <= node.split_value else node.right
+
+        return node.value
+
+
+class DecisionTreeClassifier(BaseDecisionTree[Classifier], Classifier):
+    def fit(
+        self, X: pd.DataFrame, y: np.ndarray, sample_weights: np.ndarray | None = None
+    ) -> None:
+        y_oh = one_hot_encode(y)
+        self._fit(X, y_oh, sample_weights, ClassificationCriterion(gini_impurity))
+
     def predict(self, X: pd.DataFrame) -> np.ndarray:
         return _prob_to_class(self.predict_proba(X))
 
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
-        if self._root_node is None:
-            raise ValueError("model must be trained before prediction")
-
-        def traverse_tree(x, node):
-            while isinstance(node, Node):
-                feature_val = x.iloc[node.feature_idx]
-                if isinstance(node.split_value, set):
-                    node = node.left if feature_val in node.split_value else node.right
-                else:
-                    node = node.left if feature_val <= node.split_value else node.right
-            return node.value
-
-        y_pred = np.array([traverse_tree(x, self._root_node) for _, x in X.iterrows()])
+        y_pred = np.array([self._traverse_tree(x) for _, x in X.iterrows()])
         return y_pred
 
 
-class DecisionTreeRegressor:
-    def __init__(
-        self,
-        max_depth: int = 0,
-        min_samples_leaf: int = 0,
-        min_criterion_reduction: float = 0,
-        max_features: int | float | None = None,
-    ) -> None:
-        self.max_depth = max_depth
-        self.min_samples_leaf = min_samples_leaf
-        self.min_criterion_reduction = min_criterion_reduction
-        self.max_features = max_features
-        self._root_node: Node | LeafNode | None = None
-
+class DecisionTreeRegressor(BaseDecisionTree[Regressor], Regressor):
     def fit(
         self, X: pd.DataFrame, y: np.ndarray, sample_weights: np.ndarray | None = None
     ) -> None:
         y = y.astype(np.float64)
+        self._fit(X, y, sample_weights, SquaredLossCriterion())
         if sample_weights is None:
             sample_weights = np.ones(X.shape[0], dtype=int)
 
@@ -782,17 +790,5 @@ class DecisionTreeRegressor:
         self._root_node = node
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:
-        if self._root_node is None:
-            raise ValueError("model must be trained before prediction")
-
-        def traverse_tree(x, node):
-            while isinstance(node, Node):
-                feature_val = x.iloc[node.feature_idx]
-                if isinstance(node.split_value, set):
-                    node = node.left if feature_val in node.split_value else node.right
-                else:
-                    node = node.left if feature_val <= node.split_value else node.right
-            return node.value
-
-        y_pred = np.array([traverse_tree(x, self._root_node) for _, x in X.iterrows()])
+        y_pred = np.array([self._traverse_tree(x) for _, x in X.iterrows()])
         return y_pred

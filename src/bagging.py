@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+from abc import ABC
 from collections.abc import Callable
 from typing import Generic, TypeVar
 
